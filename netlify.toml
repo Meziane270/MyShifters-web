@@ -1,0 +1,8 @@
+[build]
+command = "cd frontend && yarn install --production=false && yarn build"
+publish = "frontend/build"
+
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200
