@@ -21,12 +21,13 @@ import string
 import re
 import cloudinary
 import cloudinary.uploader
+from bson import ObjectId # Import ObjectId
 
 # -----------------------------
 # Setup / Env
 # -----------------------------
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / ".env")
+# Charger .env s'il existe (utile pour le local), sinon utiliser les variables système (Render)
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myshifters")
@@ -40,12 +41,11 @@ def get_env(name: str, default: Optional[str] = None, required: bool = False) ->
 MONGO_URL = get_env("MONGO_URL", default="mongodb://localhost:27017/myshifters")
 DB_NAME = get_env("DB_NAME", default="myshifters")
 JWT_SECRET = get_env("JWT_SECRET", default="myshifters-secret-key-2024")
-CORS_ORIGINS_RAW = get_env("CORS_ORIGINS", default="*")
 
-# Cloudinary
-CLOUDINARY_CLOUD_NAME = get_env("CLOUDINARY_CLOUD_NAME", default="mock")
-CLOUDINARY_API_KEY = get_env("CLOUDINARY_API_KEY", default="mock")
-CLOUDINARY_API_SECRET = get_env("CLOUDINARY_API_SECRET", default="mock")
+# Cloudinary - Utilisation des identifiants fournis
+CLOUDINARY_CLOUD_NAME = "drltfrn45"
+CLOUDINARY_API_KEY = "691178755413624"
+CLOUDINARY_API_SECRET = "dPbUZ_PcSH0GPH7qaUsfs-2bjaE"
 
 cloudinary.config(
     cloud_name=CLOUDINARY_CLOUD_NAME,
@@ -62,13 +62,19 @@ api_router = APIRouter(prefix="/api")
 security = HTTPBearer()
 
 def parse_cors(origins_raw: str) -> List[str]:
-    raw = (origins_raw or "").strip()
-    if not raw or raw == "*": return ["*"]
-    return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    if not origins_raw or origins_raw == "*":
+        return ["*"]
+    return [o.strip().rstrip("/") for o in origins_raw.split(",") if o.strip()]
+
+# On récupère la variable ou on met une valeur par défaut de secours
+CORS_ORIGINS_RAW = os.environ.get("CORS_ORIGINS", "https://myshifters-web.netlify.app")
+allowed_origins = parse_cors(CORS_ORIGINS_RAW)
+
+logger.info(f"CORS initialisé avec les origines : {allowed_origins}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=parse_cors(CORS_ORIGINS_RAW),
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -91,6 +97,15 @@ class DateUtils:
     def to_iso(dt: Optional[datetime]) -> Optional[str]:
         if dt is None: return None
         return dt.isoformat() if not isinstance(dt, str) else dt
+
+def clean_mongo_doc(doc: dict) -> dict:
+    """Convertit l'ObjectId de MongoDB en string et renomme _id en id."""
+    if not doc:
+        return doc
+    if "_id" in doc:
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+    return doc
 
 # -----------------------------
 # Enums & Models
@@ -170,19 +185,19 @@ async def require_admin(current_user: dict = Depends(get_current_user)):
 @api_router.post("/auth/register")
 async def register(userData: Dict[Any, Any]):
     if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
-    
+
     email = userData.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
-        
+
     existing = await db.users.find_one({"email": email})
     if existing: raise HTTPException(status_code=400, detail="Email already registered")
-    
+
     password = userData.get("password")
     if not password: raise HTTPException(status_code=400, detail="Password is required")
-    
+
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    
+
     # Flatten userData if needed and remove sensitive fields
     new_user = {
         "id": str(uuid.uuid4()),
@@ -198,34 +213,34 @@ async def register(userData: Dict[Any, Any]):
         "verification_status": "unverified",
         "created_at": DateUtils.to_iso(DateUtils.now())
     }
-    
+
     # Add any other fields from userData except already handled ones
     for k, v in userData.items():
         if k not in ["password", "confirmPassword", "email", "role", "first_name", "last_name", "hotel_name", "city", "postal_code", "phone"]:
             new_user[k] = v
-            
+
     await db.users.insert_one(new_user)
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
-    return {"token": token, "user": {k: v for k, v in new_user.items() if k != "password_hash"}}
+    return {"token": token, "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"})}
 
 @api_router.post("/auth/register/worker")
 async def register_worker(
-    email: str = Form(...),
-    password: str = Form(...),
-    first_name: str = Form(None),
-    last_name: str = Form(None),
-    role: str = Form("worker"),
-    phone: str = Form(None),
-    address: str = Form(None),
-    city: str = Form(None),
-    postal_code: str = Form(None),
-    experience_years: str = Form("0"),
-    has_ae_status: str = Form("false"),
-    siret: str = Form(None),
-    billing_address: str = Form(None),
-    billing_city: str = Form(None),
-    billing_postal_code: str = Form(None),
-    cv_pdf: UploadFile = File(None)
+        email: str = Form(...),
+        password: str = Form(...),
+        first_name: str = Form(None),
+        last_name: str = Form(None),
+        role: str = Form("worker"),
+        phone: str = Form(None),
+        address: str = Form(None),
+        city: str = Form(None),
+        postal_code: str = Form(None),
+        experience_years: str = Form("0"),
+        has_ae_status: str = Form("false"),
+        siret: str = Form(None),
+        billing_address: str = Form(None),
+        billing_city: str = Form(None),
+        billing_postal_code: str = Form(None),
+        cv_pdf: UploadFile = File(None)
 ):
     if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
     existing = await db.users.find_one({"email": email})
@@ -259,13 +274,13 @@ async def register_worker(
         "verification_status": "unverified",
         "created_at": DateUtils.to_iso(DateUtils.now())
     }
-    
+
     # Clean up None values
     new_user = {k: v for k, v in new_user.items() if v is not None}
-    
+
     await db.users.insert_one(new_user)
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
-    return {"token": token, "user": {k: v for k, v in new_user.items() if k != "password_hash"}}
+    return {"token": token, "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"})}
 
 @api_router.post("/auth/login")
 async def login(credentials: UserLogin):
@@ -275,12 +290,12 @@ async def login(credentials: UserLogin):
         if not user:
             logger.warning(f"Login failed: User {credentials.email} not found")
             raise HTTPException(status_code=401, detail="Invalid email or password")
-        
+
         stored_hash = user.get("password_hash")
         if not stored_hash:
             logger.error(f"Login failed: User {credentials.email} has no password_hash")
             raise HTTPException(status_code=401, detail="Invalid email or password")
-        
+
         # Check if the stored hash is valid for bcrypt
         is_valid = False
         try:
@@ -294,12 +309,12 @@ async def login(credentials: UserLogin):
             if credentials.password == stored_hash:
                 is_valid = True
                 logger.info(f"User {credentials.email} logged in with plain-text password. Please update to hash.")
-        
+
         if not is_valid:
             raise HTTPException(status_code=401, detail="Invalid email or password")
-            
+
         token = create_access_token({"user_id": user["id"], "role": user["role"]})
-        return {"token": token, "user": {k: v for k, v in user.items() if k != "password_hash"}}
+        return {"token": token, "user": clean_mongo_doc({k: v for k, v in user.items() if k != "password_hash"})}
     except HTTPException:
         raise
     except Exception as e:
@@ -308,7 +323,7 @@ async def login(credentials: UserLogin):
 
 @api_router.get("/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
-    return {k: v for k, v in current_user.items() if k != "password_hash"}
+    return clean_mongo_doc({k: v for k, v in current_user.items() if k != "password_hash"})
 
 # Shifts & Applications
 @api_router.post("/shifts")
@@ -321,14 +336,12 @@ async def create_shift(payload: ShiftCreate, current_user: dict = Depends(get_cu
 @api_router.get("/shifts")
 async def get_shifts():
     shifts = await db.shifts.find({"status": ShiftStatus.OPEN}).sort("created_at", -1).to_list(100)
-    for s in shifts: s.pop("_id", None)
-    return shifts
+    return [clean_mongo_doc(s) for s in shifts]
 
 @api_router.get("/shifts/hotel")
 async def get_hotel_shifts(current_user: dict = Depends(get_current_user)):
     shifts = await db.shifts.find({"hotel_id": current_user["id"]}).to_list(100)
-    for s in shifts: s.pop("_id", None)
-    return shifts
+    return [clean_mongo_doc(s) for s in shifts]
 
 @api_router.post("/applications")
 async def apply_to_shift(shift_id: str, current_user: dict = Depends(get_current_user)):
@@ -341,8 +354,7 @@ async def apply_to_shift(shift_id: str, current_user: dict = Depends(get_current
 async def get_hotel_apps(current_user: dict = Depends(get_current_user)):
     shifts = await db.shifts.find({"hotel_id": current_user["id"]}, {"id": 1}).to_list(100)
     apps = await db.applications.find({"shift_id": {"$in": [s["id"] for s in shifts]}}).to_list(100)
-    for a in apps: a.pop("_id", None)
-    return apps
+    return [clean_mongo_doc(a) for a in apps]
 
 # Profile & Avatar
 @api_router.post("/worker/avatar")
@@ -359,15 +371,13 @@ async def upload_avatar(file: UploadFile = File(...), current_user: dict = Depen
 async def get_invoices(current_user: dict = Depends(get_current_user)):
     key = "hotel_id" if current_user["role"] == UserRole.HOTEL else "worker_id"
     invs = await db.invoices.find({key: current_user["id"]}).to_list(100)
-    for i in invs: i.pop("_id", None)
-    return invs
+    return [clean_mongo_doc(i) for i in invs]
 
 # Support
 @api_router.get("/support/threads")
 async def get_threads(current_user: dict = Depends(get_current_user)):
     threads = await db.support_threads.find({"user_id": current_user["id"]}).to_list(100)
-    for t in threads: t.pop("_id", None)
-    return threads
+    return [clean_mongo_doc(t) for t in threads]
 
 # Admin
 @api_router.get("/admin/stats")
@@ -376,17 +386,21 @@ async def admin_stats(current_user: dict = Depends(require_admin)):
 
 @api_router.get("/admin/verifications/pending")
 async def pending_verifs(current_user: dict = Depends(require_admin)):
-    return {"workers": await db.users.find({"role": "worker", "verification_status": "pending"}, {"_id":0}).to_list(100), "hotels": await db.users.find({"role": "hotel", "verification_status": "pending"}, {"_id":0}).to_list(100)}
+    workers = await db.users.find({"role": "worker", "verification_status": "pending"}, {"_id":0}).to_list(100)
+    hotels = await db.users.find({"role": "hotel", "verification_status": "pending"}, {"_id":0}).to_list(100)
+    return {"workers": [clean_mongo_doc(w) for w in workers], "hotels": [clean_mongo_doc(h) for h in hotels]}
 
 @api_router.get("/admin/support/threads")
 async def admin_threads(current_user: dict = Depends(require_admin)):
     threads = await db.support_threads.find({}).to_list(100)
-    for t in threads: t.pop("_id", None)
-    return threads
+    return [clean_mongo_doc(t) for t in threads]
 
 # Others (Mock)
 @api_router.get("/admin/users")
-async def admin_users(current_user: dict = Depends(require_admin)): return await db.users.find({}, {"_id":0, "password_hash":0}).to_list(100)
+async def admin_users(current_user: dict = Depends(require_admin)):
+    users = await db.users.find({}, {"_id":0, "password_hash":0}).to_list(100)
+    return [clean_mongo_doc(u) for u in users]
+
 @api_router.get("/admin/reviews")
 async def admin_reviews(): return []
 @api_router.get("/admin/settings")
