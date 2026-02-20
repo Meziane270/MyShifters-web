@@ -103,6 +103,7 @@ def clean_mongo_doc(doc: dict) -> dict:
             doc["id"] = str(doc["_id"])
         del doc["_id"]
     return doc
+
 # -----------------------------
 # Enums & Models
 # -----------------------------
@@ -298,22 +299,136 @@ async def delete_shift(shift_id: str, current_user: dict = Depends(get_current_u
 @api_router.post("/applications")
 async def apply_to_shift(shift_id: str, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != UserRole.WORKER: raise HTTPException(status_code=403)
-    app = {"id": str(uuid.uuid4()), "shift_id": shift_id, "worker_id": current_user["id"], "status": "pending", "created_at": DateUtils.to_iso(DateUtils.now())}
+    # Vérifier si déjà postulé
+    existing = await db.applications.find_one({"shift_id": shift_id, "worker_id": current_user["id"]})
+    if existing:
+        raise HTTPException(status_code=400, detail="Vous avez déjà postulé à cette mission")
+    app = {
+        "id": str(uuid.uuid4()),
+        "shift_id": shift_id,
+        "worker_id": current_user["id"],
+        "status": ApplicationStatus.PENDING,
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    }
     await db.applications.insert_one(app)
     return app
+
+@api_router.get("/applications/worker")
+async def get_worker_applications(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != UserRole.WORKER:
+        raise HTTPException(status_code=403, detail="Accès réservé aux workers")
+    applications = await db.applications.find({"worker_id": current_user["id"]}).to_list(100)
+    # Enrichir avec les détails du shift
+    result = []
+    for app in applications:
+        app = clean_mongo_doc(app)
+        shift = await db.shifts.find_one({"id": app["shift_id"]})
+        if shift:
+            app["shift_title"] = shift.get("title")
+            app["hotel_name"] = shift.get("hotel_name")
+            app["shift_date"] = shift.get("dates", [""])[0] if shift.get("dates") else ""
+            app["shift_start_time"] = shift.get("start_time")
+            app["hourly_rate"] = shift.get("hourly_rate")
+        result.append(app)
+    return result
 
 @api_router.get("/applications/hotel")
 async def get_hotel_apps(current_user: dict = Depends(get_current_user)):
     shifts = await db.shifts.find({"hotel_id": current_user["id"]}, {"id": 1}).to_list(100)
-    apps = await db.applications.find({"shift_id": {"$in": [s["id"] for s in shifts]}}).to_list(100)
-    return [clean_mongo_doc(a) for a in apps]
+    shift_ids = [s["id"] for s in shifts]
+    apps = await db.applications.find({"shift_id": {"$in": shift_ids}}).to_list(100)
+    # Enrichir avec les infos du worker
+    result = []
+    for app in apps:
+        app = clean_mongo_doc(app)
+        worker = await db.users.find_one({"id": app["worker_id"]})
+        if worker:
+            app["worker_first_name"] = worker.get("first_name")
+            app["worker_last_name"] = worker.get("last_name")
+            app["worker_phone"] = worker.get("phone")
+        result.append(app)
+    return result
 
 @api_router.put("/applications/{app_id}")
 async def update_app(app_id: str, payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    # Seul l'hôtel propriétaire du shift ou l'admin peut modifier
+    app = await db.applications.find_one({"id": app_id})
+    if not app:
+        raise HTTPException(status_code=404, detail="Candidature non trouvée")
+    shift = await db.shifts.find_one({"id": app["shift_id"]})
+    if not shift:
+        raise HTTPException(status_code=404, detail="Mission non trouvée")
+    if current_user["role"] != UserRole.ADMIN and shift["hotel_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Non autorisé")
     await db.applications.update_one({"id": app_id}, {"$set": payload})
     return {"status": "success"}
 
-# Stats
+# Worker earnings
+@api_router.get("/worker/earnings")
+async def get_worker_earnings(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != UserRole.WORKER:
+        raise HTTPException(status_code=403, detail="Accès réservé aux workers")
+
+    apps = await db.applications.find({
+        "worker_id": current_user["id"],
+        "status": {"$in": [ApplicationStatus.ACCEPTED, ApplicationStatus.COMPLETED]}
+    }).to_list(100)
+
+    total = 0
+    details = []
+    for app in apps:
+        shift = await db.shifts.find_one({"id": app["shift_id"]})
+        if shift:
+            # Calcul de la durée en heures
+            try:
+                start_time = shift.get("start_time", "00:00")
+                end_time = shift.get("end_time", "00:00")
+                start = datetime.strptime(start_time, "%H:%M")
+                end = datetime.strptime(end_time, "%H:%M")
+                # Si l'heure de fin est <= l'heure de début, on ajoute 1 jour (mission de nuit)
+                if end <= start:
+                    end = end.replace(day=end.day + 1)
+                duration = (end - start).total_seconds() / 3600  # en heures
+            except Exception as e:
+                logger.error(f"Erreur calcul durée pour shift {shift.get('id')}: {e}")
+                duration = 0
+
+            gain = shift.get("hourly_rate", 0) * duration
+            total += gain
+            details.append({
+                "shift_id": shift["id"],
+                "title": shift.get("title"),
+                "hotel_name": shift.get("hotel_name"),
+                "date": shift.get("dates", [""])[0] if shift.get("dates") else "",
+                "start_time": shift.get("start_time"),
+                "end_time": shift.get("end_time"),
+                "duration": round(duration, 2),
+                "hourly_rate": shift.get("hourly_rate"),
+                "earned": round(gain, 2),
+                "status": app["status"]
+            })
+    return {"total_earnings": round(total, 2), "details": details}
+
+# Stats worker
+@api_router.get("/stats/worker")
+async def worker_stats(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != UserRole.WORKER:
+        raise HTTPException(status_code=403)
+    total_apps = await db.applications.count_documents({"worker_id": current_user["id"]})
+    accepted = await db.applications.count_documents({"worker_id": current_user["id"], "status": ApplicationStatus.ACCEPTED})
+    pending = await db.applications.count_documents({"worker_id": current_user["id"], "status": ApplicationStatus.PENDING})
+    rejected = await db.applications.count_documents({"worker_id": current_user["id"], "status": ApplicationStatus.REJECTED})
+    completed = await db.applications.count_documents({"worker_id": current_user["id"], "status": ApplicationStatus.COMPLETED})
+    return {
+        "total_applications": total_apps,
+        "accepted": accepted,
+        "pending": pending,
+        "rejected": rejected,
+        "completed": completed,
+        "success_rate": round(((accepted + completed) / total_apps * 100) if total_apps > 0 else 0, 1)
+    }
+
+# Stats hotel (déjà existant)
 @api_router.get("/stats/hotel")
 async def get_hotel_stats(current_user: dict = Depends(get_current_user)):
     count = await db.shifts.count_documents({"hotel_id": current_user["id"]})
@@ -380,14 +495,21 @@ async def admin_stats(current_user: dict = Depends(require_admin)):
     pending_workers = await db.users.count_documents({"role": "worker", "verification_status": "pending"})
     pending_hotels = await db.users.count_documents({"role": "hotel", "verification_status": "unverified"})
     return {
+        "total_users": await db.users.count_documents({}),
         "total_workers": await db.users.count_documents({"role": "worker"}),
         "total_hotels": await db.users.count_documents({"role": "hotel"}),
         "pending_workers": pending_workers,
         "pending_hotels": pending_hotels,
-        "pending_verifications": pending_workers + pending_hotels,  # Nouveau champ
+        "pending_verifications": pending_workers + pending_hotels,
         "total_shifts": await db.shifts.count_documents({}),
-        "revenue": 0
+        "revenue": 0,
+        "open_support_threads": await db.support_threads.count_documents({"status": "open"}),
+        "open_disputes": await db.disputes.count_documents({"status": "open"}),
+        "shifts_today": await db.shifts.count_documents({"created_at": {"$gte": DateUtils.to_iso(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))}}),
+        "active_users_7d": 0,  # À implémenter si vous avez un champ last_login
+        "applications_today": await db.applications.count_documents({"created_at": {"$gte": DateUtils.to_iso(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))}})
     }
+
 @api_router.get("/admin/users")
 async def admin_users(current_user: dict = Depends(require_admin)):
     users = await db.users.find({}, {"password_hash": 0}).to_list(100)
@@ -401,15 +523,6 @@ async def pending_verifs(current_user: dict = Depends(require_admin)):
 
 @api_router.post("/admin/users/{user_id}/verify")
 async def verify_user(user_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
-    """
-    Vérifier ou rejeter un utilisateur en attente.
-
-    Payload:
-    {
-        "status": "verified" | "rejected",
-        "reason": "Motif du rejet (optionnel, requis si status=rejected)"
-    }
-    """
     status = payload.get("status")
     reason = payload.get("reason", "")
 
@@ -420,7 +533,6 @@ async def verify_user(user_id: str, payload: Dict[Any, Any], current_user: dict 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Mettre à jour le statut
     update_data = {"verification_status": status}
     if status == "rejected" and reason:
         update_data["rejection_reason"] = reason
@@ -448,6 +560,7 @@ async def create_dispute(payload: Dict[Any, Any], current_user: dict = Depends(r
     payload["created_at"] = DateUtils.to_iso(DateUtils.now())
     await db.disputes.insert_one(payload)
     return payload
+
 @api_router.get("/admin/notifications")
 async def admin_notifications(): return []
 @api_router.get("/admin/reviews")
@@ -463,6 +576,7 @@ async def admin_settings():
 async def update_admin_settings(payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
     await db.settings.update_one({"type": "general"}, {"$set": payload}, upsert=True)
     return {"status": "success"}
+
 @api_router.get("/admin/revenue")
 async def admin_revenue(): return {"total": 0}
 
