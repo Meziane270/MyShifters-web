@@ -195,8 +195,6 @@ async def register(userData: Dict[Any, Any]):
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
     return {"token": token, "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"})}
 
-# Route admin supprimée pour des raisons de sécurité.
-
 @api_router.post("/auth/register/worker")
 async def register_worker(
         email: str = Form(...), password: str = Form(...), first_name: str = Form(None),
@@ -232,6 +230,19 @@ async def register_worker(
         "skills": skills_list,
         "verification_status": "pending", "created_at": DateUtils.to_iso(DateUtils.now())
     }
+    
+    # Enregistrer le CV comme document initial si présent
+    if cv_url:
+        cv_doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": new_user["id"],
+            "type": "cv",
+            "url": cv_url,
+            "status": "pending",
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        }
+        await db.documents.insert_one(cv_doc)
+
     new_user = {k: v for k, v in new_user.items() if v is not None}
     await db.users.insert_one(new_user)
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
@@ -263,13 +274,104 @@ async def login(credentials: UserLogin):
 async def get_me(current_user: dict = Depends(get_current_user)):
     return clean_mongo_doc({k: v for k, v in current_user.items() if k != "password_hash"})
 
+# Worker Profile Routes
+@api_router.get("/worker/profile")
+async def get_worker_profile(current_user: dict = Depends(get_current_user)):
+    return clean_mongo_doc({k: v for k, v in current_user.items() if k != "password_hash"})
+
+@api_router.put("/worker/profile")
+async def update_worker_profile(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != UserRole.WORKER: raise HTTPException(status_code=403)
+    # Ne pas autoriser la modification de l'email ou du role ici
+    update_data = {k: v for k, v in payload.items() if k not in ["id", "email", "role", "password_hash"]}
+    await db.users.update_one({"id": current_user["id"]}, {"$set": update_data})
+    return {"status": "success"}
+
+@api_router.get("/worker/experiences")
+async def get_worker_experiences(current_user: dict = Depends(get_current_user)):
+    exps = await db.experiences.find({"user_id": current_user["id"]}).to_list(100)
+    return [clean_mongo_doc(e) for e in exps]
+
+@api_router.post("/worker/experiences")
+async def add_worker_experience(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    payload["id"] = str(uuid.uuid4())
+    payload["user_id"] = current_user["id"]
+    payload["created_at"] = DateUtils.to_iso(DateUtils.now())
+    await db.experiences.insert_one(payload)
+    return clean_mongo_doc(payload)
+
+@api_router.delete("/worker/experiences/{exp_id}")
+async def delete_worker_experience(exp_id: str, current_user: dict = Depends(get_current_user)):
+    await db.experiences.delete_one({"id": exp_id, "user_id": current_user["id"]})
+    return {"status": "success"}
+
+@api_router.get("/worker/documents")
+async def get_worker_documents(current_user: dict = Depends(get_current_user)):
+    docs = await db.documents.find({"user_id": current_user["id"]}).to_list(100)
+    return [clean_mongo_doc(d) for d in docs]
+
+@api_router.post("/worker/documents")
+async def upload_worker_document(file: UploadFile = File(...), type: str = Form(...), current_user: dict = Depends(get_current_user)):
+    try:
+        upload_result = cloudinary.uploader.upload(file.file)
+        url = upload_result.get("secure_url")
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": current_user["id"],
+            "type": type,
+            "url": url,
+            "status": "pending",
+            "mime_type": file.content_type,
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        }
+        await db.documents.insert_one(doc)
+        return clean_mongo_doc(doc)
+    except Exception as e:
+        logger.error(f"Failed to upload document: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload document")
+
+@api_router.delete("/worker/documents/{doc_id}")
+async def delete_worker_document(doc_id: str, current_user: dict = Depends(get_current_user)):
+    await db.documents.delete_one({"id": doc_id, "user_id": current_user["id"]})
+    return {"status": "success"}
+
+@api_router.get("/worker/payout-account")
+async def get_payout_account(current_user: dict = Depends(get_current_user)):
+    account = await db.payout_accounts.find_one({"user_id": current_user["id"]})
+    if not account: return {"iban": "", "bic": "", "status": "pending"}
+    return clean_mongo_doc(account)
+
+@api_router.post("/worker/payout-account")
+async def update_payout_account(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    await db.payout_accounts.update_one(
+        {"user_id": current_user["id"]},
+        {"$set": {**payload, "user_id": current_user["id"], "updated_at": DateUtils.to_iso(DateUtils.now())}},
+        upsert=True
+    )
+    return {"status": "success"}
+
+@api_router.get("/worker/business")
+async def get_worker_business(current_user: dict = Depends(get_current_user)):
+    # Récupérer les infos AE depuis l'utilisateur directement ou une collection dédiée
+    return {
+        "has_ae_status": current_user.get("has_ae_status", False),
+        "siret": current_user.get("siret", ""),
+        "billing_address": current_user.get("billing_address", ""),
+        "billing_city": current_user.get("billing_city", ""),
+        "billing_postal_code": current_user.get("billing_postal_code", "")
+    }
+
+@api_router.put("/worker/ae-billing")
+async def update_worker_business(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    await db.users.update_one({"id": current_user["id"]}, {"$set": payload})
+    return {"status": "success"}
+
 # Shifts
 @api_router.post("/shifts")
 async def create_shift(payload: ShiftCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != UserRole.HOTEL: raise HTTPException(status_code=403)
     
     # Calcul de la commission de 15% pour l'hôtel
-    # Si le worker reçoit 17.5€, l'hôtel paie 17.5 * 1.15 = 20.125€
     data = payload.model_dump()
     data["hotel_hourly_rate"] = round(payload.hourly_rate * 1.15, 2)
     
@@ -283,8 +385,11 @@ async def create_shift(payload: ShiftCreate, current_user: dict = Depends(get_cu
     return new_shift
 
 @api_router.get("/shifts")
-async def get_shifts():
-    shifts = await db.shifts.find({"status": ShiftStatus.OPEN}).sort("created_at", -1).to_list(100)
+async def get_shifts(service_type: Optional[str] = None):
+    query = {"status": ShiftStatus.OPEN}
+    if service_type:
+        query["service_type"] = service_type
+    shifts = await db.shifts.find(query).sort("created_at", -1).to_list(100)
     return [clean_mongo_doc(s) for s in shifts]
 
 @api_router.get("/shifts/hotel")
@@ -299,21 +404,26 @@ async def delete_shift(shift_id: str, current_user: dict = Depends(get_current_u
 
 # Applications
 @api_router.post("/applications")
-async def apply_to_shift(shift_id: str, current_user: dict = Depends(get_current_user)):
+async def apply_to_shift(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
     if current_user["role"] != UserRole.WORKER: raise HTTPException(status_code=403)
+    shift_id = payload.get("shift_id")
+    if not shift_id: raise HTTPException(status_code=400, detail="shift_id is required")
+    
     # Vérifier si déjà postulé
     existing = await db.applications.find_one({"shift_id": shift_id, "worker_id": current_user["id"]})
     if existing:
         raise HTTPException(status_code=400, detail="Vous avez déjà postulé à cette mission")
+    
     app = {
         "id": str(uuid.uuid4()),
         "shift_id": shift_id,
         "worker_id": current_user["id"],
+        "message": payload.get("message", ""),
         "status": ApplicationStatus.PENDING,
         "created_at": DateUtils.to_iso(DateUtils.now())
     }
     await db.applications.insert_one(app)
-    return app
+    return clean_mongo_doc(app)
 
 @api_router.get("/applications/worker")
 async def get_worker_applications(current_user: dict = Depends(get_current_user)):
@@ -446,12 +556,7 @@ async def get_hotel_stats(current_user: dict = Depends(get_current_user)):
     
     pending_apps = await db.applications.count_documents({"shift_id": {"$in": shift_ids}, "status": ApplicationStatus.PENDING})
     
-    # Calcul des dépenses du mois (basé sur les shifts complétés)
-    # Pour simplifier, on compte tous les shifts de cet hôtel multipliés par leur coût hôtel
-    # En production, il faudrait une logique plus précise par application acceptée/complétée
     monthly_spend = 0
-    # Simulation de dépense
-    
     return {
         "active_shifts": active_shifts,
         "pending_applications": pending_apps,
@@ -531,7 +636,7 @@ async def admin_stats(current_user: dict = Depends(require_admin)):
         "open_support_threads": await db.support_threads.count_documents({"status": "open"}),
         "open_disputes": await db.disputes.count_documents({"status": "open"}),
         "shifts_today": await db.shifts.count_documents({"created_at": {"$gte": DateUtils.to_iso(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))}}),
-        "active_users_7d": 0,  # À implémenter si vous avez un champ last_login
+        "active_users_7d": 0,
         "applications_today": await db.applications.count_documents({"created_at": {"$gte": DateUtils.to_iso(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))}})
     }
 
@@ -550,20 +655,15 @@ async def pending_verifs(current_user: dict = Depends(require_admin)):
 async def verify_user(user_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
     status = payload.get("status")
     reason = payload.get("reason", "")
-
     if status not in ["verified", "rejected"]:
         raise HTTPException(status_code=400, detail="Status must be 'verified' or 'rejected'")
-
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
     update_data = {"verification_status": status}
     if status == "rejected" and reason:
         update_data["rejection_reason"] = reason
-
     await db.users.update_one({"id": user_id}, {"$set": update_data})
-
     return {"status": "success", "message": f"User {status}"}
 
 @api_router.get("/admin/support/threads")
@@ -571,7 +671,6 @@ async def admin_threads(current_user: dict = Depends(require_admin)):
     threads = await db.support_threads.find({}).to_list(100)
     return [clean_mongo_doc(t) for t in threads]
 
-# Mock/Missing Routes for 404
 @api_router.get("/admin/audit")
 async def admin_audit(): return []
 @api_router.get("/admin/disputes")
@@ -604,16 +703,11 @@ async def update_admin_settings(payload: Dict[Any, Any], current_user: dict = De
 
 @api_router.get("/admin/revenue")
 async def admin_revenue(current_user: dict = Depends(require_admin)):
-    # Récupérer tous les shifts pour calculer le revenu potentiel (15% de commission)
     shifts = await db.shifts.find({}).to_list(None)
     total_revenue = 0
     for s in shifts:
-        # On suppose ici que le revenu est généré par shift (ou par application acceptée)
-        # Pour cet exemple, on calcule 15% de commission sur le taux horaire
-        # En prod, il faudrait multiplier par la durée et le nombre de positions
         rate = s.get("hourly_rate", 0)
         total_revenue += rate * 0.15
-        
     return {
         "total_revenue": round(total_revenue, 2),
         "commission_rate": 0.15

@@ -45,13 +45,10 @@ export default function PersonalInfoForm({ profile, onSave, saving }) {
             return;
         }
 
-        // Pour Cloudinary, on envoie le fichier via FormData au backend
-        // Le backend doit s'occuper de l'upload vers Cloudinary
         const formDataFile = new FormData();
-        formDataFile.append('avatar', file);
+        formDataFile.append('file', file); // Changé de 'avatar' à 'file' pour correspondre au backend
         
         if (onSave) {
-            // On passe true pour indiquer que c'est un upload d'avatar
             await onSave(formDataFile, true);
         }
     };

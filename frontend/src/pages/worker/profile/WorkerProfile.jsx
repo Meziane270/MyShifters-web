@@ -18,6 +18,7 @@ import PaymentInfoSection from './components/PaymentInfoSection';
 
 export default function WorkerProfile() {
     const { fetchData, putData, postData, deleteData, loading: globalLoading } = useWorkerData();
+    const { updateUserData } = useAuth();
     
     const [profile, setProfile] = useState(null);
     const [experiences, setExperiences] = useState([]);
@@ -40,7 +41,13 @@ export default function WorkerProfile() {
                 fetchData('/worker/business')
             ]);
 
-            if (results[0].status === 'fulfilled') setProfile(results[0].value);
+            if (results[0].status === 'fulfilled') {
+                setProfile(results[0].value);
+                // Mise à jour du contexte auth avec les dernières données du profil
+                if (results[0].value) {
+                    updateUserData(results[0].value);
+                }
+            }
             if (results[1].status === 'fulfilled') setExperiences(results[1].value || []);
             if (results[2].status === 'fulfilled') setDocuments(results[2].value || []);
             if (results[3].status === 'fulfilled') setPayoutAccount(results[3].value || { iban: "", bic: "", status: "pending" });
@@ -52,7 +59,7 @@ export default function WorkerProfile() {
         } finally {
             setLoading(false);
         }
-    }, [fetchData]);
+    }, [fetchData, updateUserData]);
 
     useEffect(() => {
         loadAllProfileData();
@@ -165,6 +172,7 @@ export default function WorkerProfile() {
                     <div className="p-10">
                         <ExperienceList
                             experiences={experiences}
+                            workerSkills={profile?.skills || []}
                             onAddExperience={(exp) => handleSave('experience', '/worker/experiences', exp, 'post')}
                             onDeleteExperience={(id) => handleSave('experience', `/worker/experiences/${id}`, null, 'delete')}
                             saving={saving.experience}
