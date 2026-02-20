@@ -392,7 +392,7 @@ async def admin_users(current_user: dict = Depends(require_admin)):
 @api_router.get("/admin/verifications/pending")
 async def pending_verifs(current_user: dict = Depends(require_admin)):
     workers = await db.users.find({"role": "worker", "verification_status": "pending"}).to_list(100)
-    hotels = await db.users.find({"role": "hotel", "verification_status": "pending"}).to_list(100)
+    hotels = await db.users.find({"role": "hotel", "verification_status": "unverified"}).to_list(100)
     return {"workers": [clean_mongo_doc(w) for w in workers], "hotels": [clean_mongo_doc(h) for h in hotels]}
 
 @api_router.post("/admin/users/{user_id}/verify")
