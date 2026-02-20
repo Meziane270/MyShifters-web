@@ -52,15 +52,19 @@ export default function HotelInvoicesPage() {
                 headers: getAuthHeader()
             });
 
-            // Créer un lien de téléchargement
-            const link = document.createElement('a');
-            link.href = `data:application/pdf;base64,${res.data.pdf_base64}`;
-            link.download = res.data.filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-
-            toast.success("Facture téléchargée");
+            // Si le service PDF est intégré, télécharger le fichier
+            if (res.data.pdf_base64) {
+                const link = document.createElement('a');
+                link.href = `data:application/pdf;base64,${res.data.pdf_base64}`;
+                link.download = res.data.filename || `facture-${invoiceId}.pdf`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                toast.success("Facture téléchargée");
+            } else {
+                // Service PDF non encore intégré
+                toast.info(res.data.message || "Le service de génération PDF sera disponible prochainement.");
+            }
         } catch {
             toast.error("Erreur lors du téléchargement");
         } finally {

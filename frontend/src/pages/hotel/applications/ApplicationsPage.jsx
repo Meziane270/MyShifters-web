@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../../../context/AuthContext";
 import axios from "axios";
 import { toast } from "sonner";
-import { Users, Check, XCircle, Star, Award, Zap, Heart } from "lucide-react";
+import { Users, Check, XCircle, Star, Award, Zap, Heart, Eye } from "lucide-react";
 import { Button } from "../../../components/ui/button";
 import { Badge } from "../../../components/ui/badge";
 
@@ -33,6 +33,8 @@ export default function ApplicationsPage() {
     const [loading, setLoading] = useState(true);
     const [profileOpen, setProfileOpen] = useState(false);
     const [workerProfile, setWorkerProfile] = useState(null);
+    const [profileLoading, setProfileLoading] = useState(false);
+    const [profileError, setProfileError] = useState(null);
     const [favorites, setFavorites] = useState([]);
 
     const fetchApplications = useCallback(async () => {
@@ -77,6 +79,23 @@ export default function ApplicationsPage() {
             toast.error("Erreur lors de la mise à jour");
         }
     }, [getAuthHeader, fetchApplications]);
+
+    const handleViewProfile = useCallback(async (workerId) => {
+        setProfileOpen(true);
+        setWorkerProfile(null);
+        setProfileError(null);
+        setProfileLoading(true);
+        try {
+            const res = await axios.get(`${API}/workers/${workerId}/public`, {
+                headers: getAuthHeader()
+            });
+            setWorkerProfile(res.data);
+        } catch (e) {
+            setProfileError("Impossible de charger le profil de ce candidat.");
+        } finally {
+            setProfileLoading(false);
+        }
+    }, [getAuthHeader]);
 
     const pendingApps = useMemo(() => 
         applications.filter(a => a.status === "pending")
@@ -151,7 +170,14 @@ export default function ApplicationsPage() {
                                     </div>
                                 </div>
 
-                                <div className="flex items-center gap-4 border-t lg:border-t-0 pt-6 lg:pt-0">
+                                <div className="flex items-center gap-3 border-t lg:border-t-0 pt-6 lg:pt-0 flex-wrap">
+                                    <Button
+                                        variant="outline"
+                                        className="flex-1 lg:flex-none rounded-2xl border-slate-200 font-bold text-slate-600 hover:bg-brand/5 hover:text-brand hover:border-brand/20 transition-all"
+                                        onClick={() => handleViewProfile(app.worker_id)}
+                                    >
+                                        <Eye className="h-4 w-4 mr-2" /> Voir le profil
+                                    </Button>
                                     <Button 
                                         variant="outline" 
                                         className="flex-1 lg:flex-none rounded-2xl border-slate-100 font-bold text-slate-600 hover:bg-red-50 hover:text-red-500 hover:border-red-100 transition-all"
@@ -172,5 +198,13 @@ export default function ApplicationsPage() {
                 </div>
             )}
         </div>
+
+            <WorkerProfileDialog
+                isOpen={profileOpen}
+                onClose={() => setProfileOpen(false)}
+                workerProfile={workerProfile}
+                loading={profileLoading}
+                error={profileError}
+            />
     );
 }

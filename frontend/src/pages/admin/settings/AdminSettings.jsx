@@ -9,7 +9,7 @@ import { Label } from "../../../components/ui/label";
 import { Switch } from "../../../components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
-import { Save, RefreshCw } from "lucide-react";
+import { Save, RefreshCw, UserPlus, Eye, EyeOff } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -17,6 +17,10 @@ export default function AdminSettings() {
     const { getAuthHeader } = useAuth();
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [newAdmin, setNewAdmin] = useState({ email: "", first_name: "", last_name: "", password: "", role: "admin" });
+    const [creatingAdmin, setCreatingAdmin] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
+    const [createdAdminInfo, setCreatedAdminInfo] = useState(null);
     const [settings, setSettings] = useState({
         commission_rate: 0.15,
         min_payout_amount: 50,
@@ -65,6 +69,21 @@ export default function AdminSettings() {
         }
     };
 
+    const handleCreateAdmin = async (e) => {
+        e.preventDefault();
+        if (!newAdmin.email) { toast.error("Email requis"); return; }
+        setCreatingAdmin(true);
+        try {
+            const res = await axios.post(`${API}/admin/users`, newAdmin, { headers: getAuthHeader() });
+            toast.success(`Compte créé pour ${newAdmin.email}`);
+            setCreatedAdminInfo({ email: newAdmin.email, password: res.data.generated_password });
+            setNewAdmin({ email: "", first_name: "", last_name: "", password: "", role: "admin" });
+        } catch (e) {
+            toast.error(e?.response?.data?.detail || "Erreur lors de la création");
+        } finally {
+            setCreatingAdmin(false);
+        }
+    };
     const handleFeatureToggle = (feature, value) => {
         setSettings({
             ...settings,
@@ -119,6 +138,7 @@ export default function AdminSettings() {
                     <TabsTrigger value="general">Général</TabsTrigger>
                     <TabsTrigger value="payments">Paiements</TabsTrigger>
                     <TabsTrigger value="features">Fonctionnalités</TabsTrigger>
+                    <TabsTrigger value="admins">Créer Admin</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="general">
@@ -317,6 +337,67 @@ export default function AdminSettings() {
                                     onCheckedChange={(checked) => handleFeatureToggle('hotel_verification', checked)}
                                 />
                             </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+                <TabsContent value="admins">
+                    <Card className="bg-card border-border">
+                        <CardHeader>
+                            <CardTitle className="text-foreground flex items-center gap-2">
+                                <UserPlus className="w-5 h-5" /> Créer un compte administrateur
+                            </CardTitle>
+                            <CardDescription className="text-foreground/70">
+                                Créez un nouveau compte admin ou modérateur pour la plateforme.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            {createdAdminInfo && (
+                                <div className="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl">
+                                    <p className="font-semibold text-emerald-700 mb-1">Compte créé avec succès !</p>
+                                    <p className="text-sm">Email : <span className="font-mono font-bold">{createdAdminInfo.email}</span></p>
+                                    {createdAdminInfo.password && (
+                                        <p className="text-sm">Mot de passe généré : <span className="font-mono font-bold bg-white/50 px-2 py-0.5 rounded">{createdAdminInfo.password}</span></p>
+                                    )}
+                                    <p className="text-xs text-foreground/50 mt-1">Notez ce mot de passe, il ne sera plus affiché.</p>
+                                    <Button size="sm" variant="outline" className="mt-2 border-border" onClick={() => setCreatedAdminInfo(null)}>Fermer</Button>
+                                </div>
+                            )}
+                            <form onSubmit={handleCreateAdmin} className="space-y-4 max-w-md">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1">
+                                        <Label>Prénom</Label>
+                                        <Input value={newAdmin.first_name} onChange={e => setNewAdmin({...newAdmin, first_name: e.target.value})} placeholder="Prénom" className="bg-background border-border" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label>Nom</Label>
+                                        <Input value={newAdmin.last_name} onChange={e => setNewAdmin({...newAdmin, last_name: e.target.value})} placeholder="Nom" className="bg-background border-border" />
+                                    </div>
+                                </div>
+                                <div className="space-y-1">
+                                    <Label>Email *</Label>
+                                    <Input type="email" required value={newAdmin.email} onChange={e => setNewAdmin({...newAdmin, email: e.target.value})} placeholder="admin@myshifters.com" className="bg-background border-border" />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label>Mot de passe <span className="text-foreground/50 text-xs">(laisser vide pour générer automatiquement)</span></Label>
+                                    <div className="relative">
+                                        <Input type={showPassword ? "text" : "password"} value={newAdmin.password} onChange={e => setNewAdmin({...newAdmin, password: e.target.value})} placeholder="Optionnel" className="bg-background border-border pr-10" />
+                                        <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-foreground/50" onClick={() => setShowPassword(!showPassword)}>
+                                            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="space-y-1">
+                                    <Label>Rôle</Label>
+                                    <select value={newAdmin.role} onChange={e => setNewAdmin({...newAdmin, role: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm">
+                                        <option value="admin">Administrateur</option>
+                                        <option value="moderator">Modérateur</option>
+                                    </select>
+                                </div>
+                                <Button type="submit" disabled={creatingAdmin} className="bg-brand hover:bg-brand-light text-primary-foreground">
+                                    <UserPlus className="w-4 h-4 mr-2" />
+                                    {creatingAdmin ? "Création..." : "Créer le compte"}
+                                </Button>
+                            </form>
                         </CardContent>
                     </Card>
                 </TabsContent>

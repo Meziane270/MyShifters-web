@@ -195,8 +195,6 @@ async def register(userData: Dict[Any, Any]):
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
     return {"token": token, "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"})}
 
-# Route admin supprimée pour des raisons de sécurité.
-
 @api_router.post("/auth/register/worker")
 async def register_worker(
         email: str = Form(...), password: str = Form(...), first_name: str = Form(None),
@@ -232,6 +230,19 @@ async def register_worker(
         "skills": skills_list,
         "verification_status": "pending", "created_at": DateUtils.to_iso(DateUtils.now())
     }
+    
+    # Enregistrer le CV comme document initial si présent
+    if cv_url:
+        cv_doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": new_user["id"],
+            "type": "cv",
+            "url": cv_url,
+            "status": "pending",
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        }
+        await db.documents.insert_one(cv_doc)
+
     new_user = {k: v for k, v in new_user.items() if v is not None}
     await db.users.insert_one(new_user)
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
@@ -263,13 +274,104 @@ async def login(credentials: UserLogin):
 async def get_me(current_user: dict = Depends(get_current_user)):
     return clean_mongo_doc({k: v for k, v in current_user.items() if k != "password_hash"})
 
+# Worker Profile Routes
+@api_router.get("/worker/profile")
+async def get_worker_profile(current_user: dict = Depends(get_current_user)):
+    return clean_mongo_doc({k: v for k, v in current_user.items() if k != "password_hash"})
+
+@api_router.put("/worker/profile")
+async def update_worker_profile(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != UserRole.WORKER: raise HTTPException(status_code=403)
+    # Ne pas autoriser la modification de l'email ou du role ici
+    update_data = {k: v for k, v in payload.items() if k not in ["id", "email", "role", "password_hash"]}
+    await db.users.update_one({"id": current_user["id"]}, {"$set": update_data})
+    return {"status": "success"}
+
+@api_router.get("/worker/experiences")
+async def get_worker_experiences(current_user: dict = Depends(get_current_user)):
+    exps = await db.experiences.find({"user_id": current_user["id"]}).to_list(100)
+    return [clean_mongo_doc(e) for e in exps]
+
+@api_router.post("/worker/experiences")
+async def add_worker_experience(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    payload["id"] = str(uuid.uuid4())
+    payload["user_id"] = current_user["id"]
+    payload["created_at"] = DateUtils.to_iso(DateUtils.now())
+    await db.experiences.insert_one(payload)
+    return clean_mongo_doc(payload)
+
+@api_router.delete("/worker/experiences/{exp_id}")
+async def delete_worker_experience(exp_id: str, current_user: dict = Depends(get_current_user)):
+    await db.experiences.delete_one({"id": exp_id, "user_id": current_user["id"]})
+    return {"status": "success"}
+
+@api_router.get("/worker/documents")
+async def get_worker_documents(current_user: dict = Depends(get_current_user)):
+    docs = await db.documents.find({"user_id": current_user["id"]}).to_list(100)
+    return [clean_mongo_doc(d) for d in docs]
+
+@api_router.post("/worker/documents")
+async def upload_worker_document(file: UploadFile = File(...), type: str = Form(...), current_user: dict = Depends(get_current_user)):
+    try:
+        upload_result = cloudinary.uploader.upload(file.file)
+        url = upload_result.get("secure_url")
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": current_user["id"],
+            "type": type,
+            "url": url,
+            "status": "pending",
+            "mime_type": file.content_type,
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        }
+        await db.documents.insert_one(doc)
+        return clean_mongo_doc(doc)
+    except Exception as e:
+        logger.error(f"Failed to upload document: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload document")
+
+@api_router.delete("/worker/documents/{doc_id}")
+async def delete_worker_document(doc_id: str, current_user: dict = Depends(get_current_user)):
+    await db.documents.delete_one({"id": doc_id, "user_id": current_user["id"]})
+    return {"status": "success"}
+
+@api_router.get("/worker/payout-account")
+async def get_payout_account(current_user: dict = Depends(get_current_user)):
+    account = await db.payout_accounts.find_one({"user_id": current_user["id"]})
+    if not account: return {"iban": "", "bic": "", "status": "pending"}
+    return clean_mongo_doc(account)
+
+@api_router.post("/worker/payout-account")
+async def update_payout_account(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    await db.payout_accounts.update_one(
+        {"user_id": current_user["id"]},
+        {"$set": {**payload, "user_id": current_user["id"], "updated_at": DateUtils.to_iso(DateUtils.now())}},
+        upsert=True
+    )
+    return {"status": "success"}
+
+@api_router.get("/worker/business")
+async def get_worker_business(current_user: dict = Depends(get_current_user)):
+    # Récupérer les infos AE depuis l'utilisateur directement ou une collection dédiée
+    return {
+        "has_ae_status": current_user.get("has_ae_status", False),
+        "siret": current_user.get("siret", ""),
+        "billing_address": current_user.get("billing_address", ""),
+        "billing_city": current_user.get("billing_city", ""),
+        "billing_postal_code": current_user.get("billing_postal_code", "")
+    }
+
+@api_router.put("/worker/ae-billing")
+async def update_worker_business(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    await db.users.update_one({"id": current_user["id"]}, {"$set": payload})
+    return {"status": "success"}
+
 # Shifts
 @api_router.post("/shifts")
 async def create_shift(payload: ShiftCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != UserRole.HOTEL: raise HTTPException(status_code=403)
     
     # Calcul de la commission de 15% pour l'hôtel
-    # Si le worker reçoit 17.5€, l'hôtel paie 17.5 * 1.15 = 20.125€
     data = payload.model_dump()
     data["hotel_hourly_rate"] = round(payload.hourly_rate * 1.15, 2)
     
@@ -283,14 +385,36 @@ async def create_shift(payload: ShiftCreate, current_user: dict = Depends(get_cu
     return new_shift
 
 @api_router.get("/shifts")
-async def get_shifts():
-    shifts = await db.shifts.find({"status": ShiftStatus.OPEN}).sort("created_at", -1).to_list(100)
+async def get_shifts(service_type: Optional[str] = None):
+    query = {"status": ShiftStatus.OPEN}
+    if service_type:
+        query["service_type"] = service_type
+    shifts = await db.shifts.find(query).sort("created_at", -1).to_list(100)
     return [clean_mongo_doc(s) for s in shifts]
 
 @api_router.get("/shifts/hotel")
-async def get_hotel_shifts(current_user: dict = Depends(get_current_user)):
-    shifts = await db.shifts.find({"hotel_id": current_user["id"]}).to_list(100)
-    return [clean_mongo_doc(s) for s in shifts]
+async def get_hotel_shifts(
+    current_user: dict = Depends(get_current_user),
+    status: Optional[str] = Query(None)
+):
+    query = {"hotel_id": current_user["id"]}
+    if status:
+        query["status"] = status
+    shifts = await db.shifts.find(query).sort("created_at", -1).to_list(100)
+    result = []
+    for shift in shifts:
+        shift = clean_mongo_doc(shift)
+        # Récupérer le worker assigné si mission completée
+        if shift.get("status") in ["completed", "filled"]:
+            accepted_app = await db.applications.find_one({"shift_id": shift["id"], "status": {"$in": ["accepted", "completed"]}})
+            if accepted_app:
+                worker = await db.users.find_one({"id": accepted_app.get("worker_id")}, {"password_hash": 0})
+                if worker:
+                    shift["worker_id"] = worker.get("id")
+                    shift["worker_name"] = f"{worker.get('first_name','')} {worker.get('last_name','')}".strip()
+                    shift["worker_email"] = worker.get("email")
+        result.append(shift)
+    return result
 
 @api_router.delete("/shifts/{shift_id}")
 async def delete_shift(shift_id: str, current_user: dict = Depends(get_current_user)):
@@ -299,21 +423,26 @@ async def delete_shift(shift_id: str, current_user: dict = Depends(get_current_u
 
 # Applications
 @api_router.post("/applications")
-async def apply_to_shift(shift_id: str, current_user: dict = Depends(get_current_user)):
+async def apply_to_shift(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
     if current_user["role"] != UserRole.WORKER: raise HTTPException(status_code=403)
+    shift_id = payload.get("shift_id")
+    if not shift_id: raise HTTPException(status_code=400, detail="shift_id is required")
+    
     # Vérifier si déjà postulé
     existing = await db.applications.find_one({"shift_id": shift_id, "worker_id": current_user["id"]})
     if existing:
         raise HTTPException(status_code=400, detail="Vous avez déjà postulé à cette mission")
+    
     app = {
         "id": str(uuid.uuid4()),
         "shift_id": shift_id,
         "worker_id": current_user["id"],
+        "message": payload.get("message", ""),
         "status": ApplicationStatus.PENDING,
         "created_at": DateUtils.to_iso(DateUtils.now())
     }
     await db.applications.insert_one(app)
-    return app
+    return clean_mongo_doc(app)
 
 @api_router.get("/applications/worker")
 async def get_worker_applications(current_user: dict = Depends(get_current_user)):
@@ -411,7 +540,9 @@ async def get_worker_earnings(current_user: dict = Depends(get_current_user)):
                 "earned": round(gain, 2),
                 "status": app["status"]
             })
-    return {"total_earnings": round(total, 2), "details": details}
+    paid = sum(d["earned"] for d in details if d["status"] == ApplicationStatus.COMPLETED)
+    pending = sum(d["earned"] for d in details if d["status"] == ApplicationStatus.ACCEPTED)
+    return {"total_earnings": round(total, 2), "total": round(total, 2), "paid": round(paid, 2), "pending": round(pending, 2), "details": details}
 
 # Stats worker
 @api_router.get("/stats/worker")
@@ -446,12 +577,7 @@ async def get_hotel_stats(current_user: dict = Depends(get_current_user)):
     
     pending_apps = await db.applications.count_documents({"shift_id": {"$in": shift_ids}, "status": ApplicationStatus.PENDING})
     
-    # Calcul des dépenses du mois (basé sur les shifts complétés)
-    # Pour simplifier, on compte tous les shifts de cet hôtel multipliés par leur coût hôtel
-    # En production, il faudrait une logique plus précise par application acceptée/complétée
     monthly_spend = 0
-    # Simulation de dépense
-    
     return {
         "active_shifts": active_shifts,
         "pending_applications": pending_apps,
@@ -462,11 +588,45 @@ async def get_hotel_stats(current_user: dict = Depends(get_current_user)):
 # Invoices
 @api_router.get("/invoices/hotel")
 @api_router.get("/invoices/worker")
+@api_router.get("/worker/invoices")
+@api_router.get("/hotel/invoices")
 async def get_invoices(current_user: dict = Depends(get_current_user)):
     key = "hotel_id" if current_user["role"] == UserRole.HOTEL else "worker_id"
     invs = await db.invoices.find({key: current_user["id"]}).to_list(100)
     return [clean_mongo_doc(i) for i in invs]
-
+@api_router.get("/invoices/{invoice_id}/download")
+async def download_invoice(invoice_id: str, current_user: dict = Depends(get_current_user)):
+    """Retourne les détails d'une facture pour génération PDF (service non intégré pour l'instant)"""
+    invoice = await db.invoices.find_one({"id": invoice_id})
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+    invoice = clean_mongo_doc(invoice)
+    # Vérifier l'accès
+    if current_user.get("role") != "admin" and invoice.get("hotel_id") != current_user["id"] and invoice.get("worker_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    return {"invoice": invoice, "message": "Service de génération PDF non encore intégré"}
+@api_router.post("/worker/invoices")
+async def upload_worker_invoice(file: UploadFile = File(...), mission_id: str = Form(...), current_user: dict = Depends(get_current_user)):
+    """Permet à un worker de transmettre sa facture pour une mission"""
+    if current_user["role"] != UserRole.WORKER:
+        raise HTTPException(status_code=403, detail="Réservé aux workers")
+    try:
+        upload_result = cloudinary.uploader.upload(file.file, resource_type="raw")
+        url = upload_result.get("secure_url")
+        invoice = {
+            "id": str(uuid.uuid4()),
+            "worker_id": current_user["id"],
+            "shift_id": mission_id,
+            "url": url,
+            "filename": file.filename,
+            "status": "submitted",
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        }
+        await db.invoices.insert_one(invoice)
+        return clean_mongo_doc(invoice)
+    except Exception as e:
+        logger.error(f"Failed to upload worker invoice: {e}")
+        raise HTTPException(status_code=500, detail="Erreur lors de l'envoi de la facture")
 # Profile & Avatar
 @api_router.post("/worker/avatar")
 @api_router.post("/hotel/avatar")
@@ -493,25 +653,215 @@ async def update_hotel_settings(payload: Dict[Any, Any], current_user: dict = De
     await db.hotel_settings.update_one({"hotel_id": current_user["id"]}, {"$set": payload}, upsert=True)
     return {"status": "success"}
 
-# Support
+# Support (routes communes + routes spécifiques worker/hotel)
 @api_router.get("/support/threads")
 @api_router.get("/support/threads/me")
 async def get_threads(current_user: dict = Depends(get_current_user)):
     threads = await db.support_threads.find({"user_id": current_user["id"]}).sort("created_at", -1).to_list(100)
     return [clean_mongo_doc(t) for t in threads]
 
+@api_router.get("/worker/support/threads")
+async def get_worker_threads(current_user: dict = Depends(get_current_user)):
+    threads = await db.support_threads.find({"user_id": current_user["id"]}).sort("created_at", -1).to_list(100)
+    return [clean_mongo_doc(t) for t in threads]
+
+@api_router.get("/hotel/support/threads")
+async def get_hotel_threads(current_user: dict = Depends(get_current_user)):
+    threads = await db.support_threads.find({"user_id": current_user["id"]}).sort("created_at", -1).to_list(100)
+    return [clean_mongo_doc(t) for t in threads]
+
+@api_router.get("/support/threads/{thread_id}")
+async def get_thread_messages(thread_id: str, current_user: dict = Depends(get_current_user)):
+    thread = await db.support_threads.find_one({"id": thread_id})
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    # Vérifier que l'utilisateur a accès (propriétaire ou admin)
+    if current_user.get("role") != "admin" and thread.get("user_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    messages = await db.support_messages.find({"thread_id": thread_id}).sort("created_at", 1).to_list(500)
+    return [clean_mongo_doc(m) for m in messages]
+
+@api_router.get("/worker/support/threads/{thread_id}")
+async def get_worker_thread_messages(thread_id: str, current_user: dict = Depends(get_current_user)):
+    thread = await db.support_threads.find_one({"id": thread_id, "user_id": current_user["id"]})
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    messages = await db.support_messages.find({"thread_id": thread_id}).sort("created_at", 1).to_list(500)
+    return [clean_mongo_doc(m) for m in messages]
+
+@api_router.get("/hotel/support/threads/{thread_id}")
+async def get_hotel_thread_messages(thread_id: str, current_user: dict = Depends(get_current_user)):
+    thread = await db.support_threads.find_one({"id": thread_id, "user_id": current_user["id"]})
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    messages = await db.support_messages.find({"thread_id": thread_id}).sort("created_at", 1).to_list(500)
+    return [clean_mongo_doc(m) for m in messages]
+
+@api_router.post("/support/threads/{thread_id}/messages")
+async def post_thread_message(thread_id: str, payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    thread = await db.support_threads.find_one({"id": thread_id})
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if current_user.get("role") != "admin" and thread.get("user_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    is_admin = current_user.get("role") == "admin"
+    message = {
+        "id": str(uuid.uuid4()),
+        "thread_id": thread_id,
+        "sender_id": current_user["id"],
+        "sender_email": current_user.get("email"),
+        "sender_role": current_user.get("role"),
+        "body": payload.get("body", ""),
+        "is_admin": is_admin,
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    }
+    await db.support_messages.insert_one(message)
+    # Mettre à jour le thread avec le dernier message
+    await db.support_threads.update_one(
+        {"id": thread_id},
+        {"$set": {
+            "last_message": payload.get("body", "")[:100],
+            "last_message_at": DateUtils.to_iso(DateUtils.now()),
+            "last_sender_role": current_user.get("role"),
+            "status": "in_progress" if not is_admin else thread.get("status", "open")
+        }}
+    )
+    return clean_mongo_doc(message)
+
+@api_router.post("/worker/support/threads/{thread_id}/messages")
+async def post_worker_thread_message(thread_id: str, payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    thread = await db.support_threads.find_one({"id": thread_id, "user_id": current_user["id"]})
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    message = {
+        "id": str(uuid.uuid4()),
+        "thread_id": thread_id,
+        "sender_id": current_user["id"],
+        "sender_email": current_user.get("email"),
+        "sender_role": current_user.get("role"),
+        "body": payload.get("body", ""),
+        "is_admin": False,
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    }
+    await db.support_messages.insert_one(message)
+    await db.support_threads.update_one(
+        {"id": thread_id},
+        {"$set": {
+            "last_message": payload.get("body", "")[:100],
+            "last_message_at": DateUtils.to_iso(DateUtils.now()),
+            "last_sender_role": "worker"
+        }}
+    )
+    return clean_mongo_doc(message)
+
+@api_router.post("/hotel/support/threads/{thread_id}/messages")
+async def post_hotel_thread_message(thread_id: str, payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    thread = await db.support_threads.find_one({"id": thread_id, "user_id": current_user["id"]})
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    message = {
+        "id": str(uuid.uuid4()),
+        "thread_id": thread_id,
+        "sender_id": current_user["id"],
+        "sender_email": current_user.get("email"),
+        "sender_role": current_user.get("role"),
+        "body": payload.get("body", ""),
+        "is_admin": False,
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    }
+    await db.support_messages.insert_one(message)
+    await db.support_threads.update_one(
+        {"id": thread_id},
+        {"$set": {
+            "last_message": payload.get("body", "")[:100],
+            "last_message_at": DateUtils.to_iso(DateUtils.now()),
+            "last_sender_role": "hotel"
+        }}
+    )
+    return clean_mongo_doc(message)
+
 @api_router.post("/support/threads")
 async def create_support_thread(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    thread_id = str(uuid.uuid4())
     thread = {
-        "id": str(uuid.uuid4()),
+        "id": thread_id,
         "user_id": current_user["id"],
         "user_email": current_user["email"],
+        "user_role": current_user.get("role"),
         "subject": payload.get("subject"),
-        "message": payload.get("message"),
         "status": "open",
         "created_at": DateUtils.to_iso(DateUtils.now())
     }
     await db.support_threads.insert_one(thread)
+    # Créer le premier message
+    if payload.get("message"):
+        first_message = {
+            "id": str(uuid.uuid4()),
+            "thread_id": thread_id,
+            "sender_id": current_user["id"],
+            "sender_email": current_user.get("email"),
+            "sender_role": current_user.get("role"),
+            "body": payload.get("message"),
+            "is_admin": False,
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        }
+        await db.support_messages.insert_one(first_message)
+        thread["last_message"] = payload.get("message", "")[:100]
+        thread["last_message_at"] = DateUtils.to_iso(DateUtils.now())
+    return clean_mongo_doc(thread)
+
+@api_router.post("/worker/support/threads")
+async def create_worker_support_thread(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    thread_id = str(uuid.uuid4())
+    thread = {
+        "id": thread_id,
+        "user_id": current_user["id"],
+        "user_email": current_user["email"],
+        "user_role": "worker",
+        "subject": payload.get("subject"),
+        "status": "open",
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    }
+    await db.support_threads.insert_one(thread)
+    if payload.get("message"):
+        first_message = {
+            "id": str(uuid.uuid4()),
+            "thread_id": thread_id,
+            "sender_id": current_user["id"],
+            "sender_email": current_user.get("email"),
+            "sender_role": "worker",
+            "body": payload.get("message"),
+            "is_admin": False,
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        }
+        await db.support_messages.insert_one(first_message)
+    return clean_mongo_doc(thread)
+
+@api_router.post("/hotel/support/threads")
+async def create_hotel_support_thread(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    thread_id = str(uuid.uuid4())
+    thread = {
+        "id": thread_id,
+        "user_id": current_user["id"],
+        "user_email": current_user["email"],
+        "user_role": "hotel",
+        "subject": payload.get("subject"),
+        "status": "open",
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    }
+    await db.support_threads.insert_one(thread)
+    if payload.get("message"):
+        first_message = {
+            "id": str(uuid.uuid4()),
+            "thread_id": thread_id,
+            "sender_id": current_user["id"],
+            "sender_email": current_user.get("email"),
+            "sender_role": "hotel",
+            "body": payload.get("message"),
+            "is_admin": False,
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        }
+        await db.support_messages.insert_one(first_message)
     return clean_mongo_doc(thread)
 
 # Admin
@@ -530,50 +880,496 @@ async def admin_stats(current_user: dict = Depends(require_admin)):
         "revenue": 0,
         "open_support_threads": await db.support_threads.count_documents({"status": "open"}),
         "open_disputes": await db.disputes.count_documents({"status": "open"}),
+        "pending_reviews": await db.ratings.count_documents({"verified": {"$ne": True}}),
         "shifts_today": await db.shifts.count_documents({"created_at": {"$gte": DateUtils.to_iso(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))}}),
-        "active_users_7d": 0,  # À implémenter si vous avez un champ last_login
+        "active_users_7d": 0,
         "applications_today": await db.applications.count_documents({"created_at": {"$gte": DateUtils.to_iso(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))}})
     }
 
 @api_router.get("/admin/users")
-async def admin_users(current_user: dict = Depends(require_admin)):
-    users = await db.users.find({}, {"password_hash": 0}).to_list(100)
-    return [clean_mongo_doc(u) for u in users]
+async def admin_users(
+    current_user: dict = Depends(require_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    role: Optional[str] = Query(None),
+    verification: Optional[str] = Query(None),
+    search: Optional[str] = Query(None)
+):
+    query = {}
+    if role:
+        query["role"] = role
+    if verification:
+        query["verification_status"] = verification
+    if search:
+        query["$or"] = [
+            {"email": {"$regex": search, "$options": "i"}},
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
+            {"hotel_name": {"$regex": search, "$options": "i"}},
+        ]
+    total = await db.users.count_documents(query)
+    skip = (page - 1) * limit
+    users = await db.users.find(query, {"password_hash": 0}).skip(skip).limit(limit).to_list(limit)
+    def enrich_user(u):
+        u = clean_mongo_doc(u)
+        fn = u.get("first_name", "") or ""
+        ln = u.get("last_name", "") or ""
+        u["name"] = f"{fn} {ln}".strip() or u.get("email", "")
+        return u
+    return {
+        "users": [enrich_user(u) for u in users],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": max(1, (total + limit - 1) // limit)
+    }
+
+@api_router.get("/admin/users/export")
+async def export_users(current_user: dict = Depends(require_admin)):
+    from fastapi.responses import StreamingResponse
+    import io, csv
+    users = await db.users.find({}, {"password_hash": 0}).to_list(None)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "email", "role", "first_name", "last_name", "hotel_name", "verification_status", "created_at"])
+    for u in users:
+        writer.writerow([u.get("id",""), u.get("email",""), u.get("role",""), u.get("first_name",""), u.get("last_name",""), u.get("hotel_name",""), u.get("verification_status",""), u.get("created_at","")])
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=utilisateurs.csv"})
+
+@api_router.get("/admin/users/{user_id}")
+async def admin_get_user(user_id: str, current_user: dict = Depends(require_admin)):
+    user = await db.users.find_one({"id": user_id}, {"password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user = clean_mongo_doc(user)
+    # Récupérer les documents
+    documents = await db.documents.find({"user_id": user_id}).to_list(100)
+    user["documents"] = [clean_mongo_doc(d) for d in documents]
+    # Récupérer les expériences
+    experiences = await db.experiences.find({"user_id": user_id}).to_list(100)
+    user["experiences"] = [clean_mongo_doc(e) for e in experiences]
+    # Récupérer les suspensions
+    suspensions = await db.suspensions.find({"user_id": user_id}).sort("suspended_at", -1).to_list(50)
+    user["suspensions"] = [clean_mongo_doc(s) for s in suspensions]
+    # Récupérer l'audit log de l'utilisateur
+    audit_log = await db.audit_logs.find({"target_id": user_id}).sort("created_at", -1).to_list(50)
+    user["audit_log"] = [clean_mongo_doc(a) for a in audit_log]
+    # Stats missions
+    if user.get("role") == "worker":
+        total_apps = await db.applications.count_documents({"worker_id": user_id})
+        completed = await db.applications.count_documents({"worker_id": user_id, "status": ApplicationStatus.COMPLETED})
+        user["total_applications"] = total_apps
+        user["total_completed"] = completed
+    elif user.get("role") == "hotel":
+        total_shifts = await db.shifts.count_documents({"hotel_id": user_id})
+        user["total_shifts"] = total_shifts
+    return {"user": user}
 
 @api_router.get("/admin/verifications/pending")
 async def pending_verifs(current_user: dict = Depends(require_admin)):
-    workers = await db.users.find({"role": "worker", "verification_status": "pending"}).to_list(100)
-    hotels = await db.users.find({"role": "hotel", "verification_status": "unverified"}).to_list(100)
-    return {"workers": [clean_mongo_doc(w) for w in workers], "hotels": [clean_mongo_doc(h) for h in hotels]}
+    workers_raw = await db.users.find({"role": "worker", "verification_status": "pending"}).to_list(100)
+    hotels_raw = await db.users.find({"role": "hotel", "verification_status": "unverified"}).to_list(100)
+    # Enrichir chaque worker avec ses documents et son nom
+    workers_enriched = []
+    for w in workers_raw:
+        w = clean_mongo_doc(w)
+        fn = w.get("first_name", "") or ""
+        ln = w.get("last_name", "") or ""
+        w["name"] = f"{fn} {ln}".strip() or w.get("email", "")
+        docs = await db.documents.find({"user_id": w["id"]}).to_list(50)
+        w["documents"] = [clean_mongo_doc(d) for d in docs]
+        workers_enriched.append(w)
+    hotels_enriched = []
+    for h in hotels_raw:
+        h = clean_mongo_doc(h)
+        fn = h.get("first_name", "") or ""
+        ln = h.get("last_name", "") or ""
+        h["name"] = f"{fn} {ln}".strip() or h.get("email", "")
+        docs = await db.documents.find({"user_id": h["id"]}).to_list(50)
+        h["documents"] = [clean_mongo_doc(d) for d in docs]
+        hotels_enriched.append(h)
+    return {"workers": workers_enriched, "hotels": hotels_enriched}
 
 @api_router.post("/admin/users/{user_id}/verify")
 async def verify_user(user_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
     status = payload.get("status")
     reason = payload.get("reason", "")
-
     if status not in ["verified", "rejected"]:
         raise HTTPException(status_code=400, detail="Status must be 'verified' or 'rejected'")
-
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
     update_data = {"verification_status": status}
     if status == "rejected" and reason:
         update_data["rejection_reason"] = reason
-
     await db.users.update_one({"id": user_id}, {"$set": update_data})
-
+    # Audit log
+    await db.audit_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "admin_id": current_user["id"],
+        "admin_email": current_user.get("email"),
+        "action": f"user_{status}",
+        "target_type": "user",
+        "target_id": user_id,
+        "target_email": user.get("email"),
+        "details": {"reason": reason},
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    })
     return {"status": "success", "message": f"User {status}"}
 
+@api_router.put("/admin/users/{user_id}/suspend")
+async def suspend_user(user_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    action = payload.get("action", "suspend")  # suspend or unsuspend
+    reason = payload.get("reason", "")
+    duration_days = payload.get("duration_days", 0)
+    if action == "suspend":
+        suspended_until = None
+        if duration_days and duration_days > 0:
+            suspended_until = DateUtils.to_iso(DateUtils.now() + timedelta(days=duration_days))
+        await db.users.update_one({"id": user_id}, {"$set": {"is_suspended": True, "suspended_until": suspended_until, "suspension_reason": reason}})
+        await db.suspensions.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "admin_id": current_user["id"],
+            "admin_email": current_user.get("email"),
+            "suspended_by_email": current_user.get("email"),
+            "reason": reason,
+            "duration_days": duration_days,
+            "suspended_until": suspended_until,
+            "expires_at": suspended_until,
+            "status": "active",
+            "suspended_at": DateUtils.to_iso(DateUtils.now())
+        })
+        await db.audit_logs.insert_one({
+            "id": str(uuid.uuid4()),
+            "admin_id": current_user["id"],
+            "admin_email": current_user.get("email"),
+            "action": "user_suspended",
+            "target_type": "user",
+            "target_id": user_id,
+            "target_email": user.get("email"),
+            "details": {"reason": reason, "duration_days": duration_days},
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        })
+    else:
+        await db.users.update_one({"id": user_id}, {"$set": {"is_suspended": False, "suspended_until": None, "suspension_reason": None}})
+        await db.audit_logs.insert_one({
+            "id": str(uuid.uuid4()),
+            "admin_id": current_user["id"],
+            "admin_email": current_user.get("email"),
+            "action": "user_unbanned",
+            "target_type": "user",
+            "target_id": user_id,
+            "target_email": user.get("email"),
+            "details": {},
+            "created_at": DateUtils.to_iso(DateUtils.now())
+        })
+    return {"status": "success"}
+
+@api_router.post("/admin/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    new_password = payload.get("new_password")
+    if not new_password:
+        # Générer un mot de passe aléatoire
+        new_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+    password_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    await db.users.update_one({"id": user_id}, {"$set": {"password_hash": password_hash}})
+    await db.audit_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "admin_id": current_user["id"],
+        "admin_email": current_user.get("email"),
+        "action": "password_reset_admin",
+        "target_type": "user",
+        "target_id": user_id,
+        "target_email": user.get("email"),
+        "details": {},
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    })
+    return {"status": "success", "new_password": new_password}
+
+@api_router.put("/admin/documents/{doc_id}/status")
+async def admin_update_document_status(doc_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    doc = await db.documents.find_one({"id": doc_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    new_status = payload.get("status")
+    # Normaliser : "approved" -> "verified" pour cohérence avec le frontend
+    if new_status == "approved":
+        new_status = "verified"
+    if new_status not in ["verified", "rejected", "pending"]:
+        raise HTTPException(status_code=400, detail="Status must be verified, rejected or pending")
+    reason = payload.get("reason", "")
+    await db.documents.update_one({"id": doc_id}, {"$set": {"status": new_status, "rejection_reason": reason, "reviewed_at": DateUtils.to_iso(DateUtils.now()), "reviewed_by": current_user["id"]}})
+    await db.audit_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "admin_id": current_user["id"],
+        "admin_email": current_user.get("email"),
+        "action": f"document_{new_status}",
+        "target_type": "document",
+        "target_id": doc_id,
+        "target_email": doc.get("user_id"),
+        "details": {"reason": reason, "doc_type": doc.get("type")},
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    })
+    return {"status": "success"}
 @api_router.get("/admin/support/threads")
-async def admin_threads(current_user: dict = Depends(require_admin)):
-    threads = await db.support_threads.find({}).to_list(100)
+async def admin_threads(
+    current_user: dict = Depends(require_admin),
+    q: Optional[str] = Query(None),
+    status: Optional[str] = Query(None)
+):
+    query = {}
+    if status:
+        query["status"] = status
+    if q:
+        query["$or"] = [
+            {"subject": {"$regex": q, "$options": "i"}},
+            {"user_email": {"$regex": q, "$options": "i"}},
+        ]
+    threads = await db.support_threads.find(query).sort("created_at", -1).to_list(200)
     return [clean_mongo_doc(t) for t in threads]
 
-# Mock/Missing Routes for 404
+@api_router.put("/admin/support/threads/{thread_id}")
+async def admin_update_thread(thread_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    update = {}
+    if "status" in payload:
+        update["status"] = payload["status"]
+    if payload.get("mark_admin_read"):
+        update["admin_read"] = True
+        update["admin_read_at"] = DateUtils.to_iso(DateUtils.now())
+    if update:
+        await db.support_threads.update_one({"id": thread_id}, {"$set": update})
+    return {"status": "success"}
+
+@api_router.get("/admin/shifts")
+async def admin_shifts(
+    current_user: dict = Depends(require_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None)
+):
+    query = {}
+    if status:
+        query["status"] = status
+    if search:
+        query["$or"] = [
+            {"title": {"$regex": search, "$options": "i"}},
+            {"hotel_name": {"$regex": search, "$options": "i"}},
+        ]
+    total = await db.shifts.count_documents(query)
+    skip = (page - 1) * limit
+    shifts = await db.shifts.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    result = []
+    for shift in shifts:
+        shift = clean_mongo_doc(shift)
+        # Récupérer les candidatures pour ce shift
+        apps = await db.applications.find({"shift_id": shift["id"]}).to_list(100)
+        shift["applications"] = [clean_mongo_doc(a) for a in apps]
+        result.append(shift)
+    return {
+        "shifts": result,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": max(1, (total + limit - 1) // limit)
+    }
+
+@api_router.put("/admin/shifts/{shift_id}/assign")
+async def admin_assign_shift(shift_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    worker_id = payload.get("worker_id")
+    if not worker_id:
+        raise HTTPException(status_code=400, detail="worker_id required")
+    # Trouver ou créer une candidature
+    existing = await db.applications.find_one({"shift_id": shift_id, "worker_id": worker_id})
+    if existing:
+        await db.applications.update_one({"shift_id": shift_id, "worker_id": worker_id}, {"$set": {"status": "accepted"}})
+    else:
+        worker = await db.users.find_one({"id": worker_id})
+        if not worker:
+            raise HTTPException(status_code=404, detail="Worker not found")
+        app = {
+            "id": str(uuid.uuid4()),
+            "shift_id": shift_id,
+            "worker_id": worker_id,
+            "worker_name": f"{worker.get('first_name','')} {worker.get('last_name','')}".strip(),
+            "worker_email": worker.get("email"),
+            "status": "accepted",
+            "created_at": DateUtils.to_iso(DateUtils.now()),
+            "assigned_by_admin": True
+        }
+        await db.applications.insert_one(app)
+    await db.shifts.update_one({"id": shift_id}, {"$set": {"status": "filled"}})
+    return {"status": "success"}
+
 @api_router.get("/admin/audit")
-async def admin_audit(): return []
+async def admin_audit(
+    current_user: dict = Depends(require_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    action: Optional[str] = Query(None),
+    target_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None)
+):
+    query = {}
+    if action:
+        query["action"] = action
+    if target_type:
+        query["target_type"] = target_type
+    if search:
+        query["$or"] = [
+            {"admin_email": {"$regex": search, "$options": "i"}},
+            {"target_email": {"$regex": search, "$options": "i"}},
+        ]
+    total = await db.audit_logs.count_documents(query)
+    skip = (page - 1) * limit
+    logs = await db.audit_logs.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    return {
+        "logs": [clean_mongo_doc(l) for l in logs],
+        "total": total,
+        "page": page,
+        "limit": limit,
+         "pages": max(1, (total + limit - 1) // limit)
+    }
+@api_router.get("/admin/audit/export")
+async def admin_audit_export(current_user: dict = Depends(require_admin)):
+    """Exporte tous les logs d'audit en CSV"""
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv
+    logs = await db.audit_logs.find({}).sort("created_at", -1).to_list(None)
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["id", "admin_email", "action", "target_type", "target_email", "created_at", "details"])
+    writer.writeheader()
+    for log in logs:
+        log = clean_mongo_doc(log)
+        writer.writerow({
+            "id": log.get("id", ""),
+            "admin_email": log.get("admin_email", ""),
+            "action": log.get("action", ""),
+            "target_type": log.get("target_type", ""),
+            "target_email": log.get("target_email", ""),
+            "created_at": log.get("created_at", ""),
+            "details": str(log.get("details", ""))
+        })
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=audit.csv"}
+    )
+@api_router.get("/admin/reviews")
+async def admin_reviews(
+    current_user: dict = Depends(require_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    verified: Optional[str] = Query(None)
+):
+    query = {}
+    if verified == "true":
+        query["verified"] = True
+    elif verified == "false":
+        query["verified"] = {"$ne": True}
+    total = await db.ratings.count_documents(query)
+    skip = (page - 1) * limit
+    reviews = await db.ratings.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    return {
+        "reviews": [clean_mongo_doc(r) for r in reviews],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": max(1, (total + limit - 1) // limit)
+    }
+
+@api_router.put("/admin/reviews/{review_id}/verify")
+async def admin_verify_review(review_id: str, current_user: dict = Depends(require_admin)):
+    await db.ratings.update_one({"id": review_id}, {"$set": {"verified": True, "verified_at": DateUtils.to_iso(DateUtils.now()), "verified_by": current_user["id"]}})
+    await db.audit_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "admin_id": current_user["id"],
+        "admin_email": current_user.get("email"),
+        "action": "review_verified",
+        "target_type": "review",
+        "target_id": review_id,
+        "details": {},
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    })
+    return {"status": "success"}
+
+@api_router.put("/admin/reviews/{review_id}/hide")
+async def admin_hide_review(review_id: str, current_user: dict = Depends(require_admin)):
+    await db.ratings.update_one({"id": review_id}, {"$set": {"visible": False}})
+    await db.audit_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "admin_id": current_user["id"],
+        "admin_email": current_user.get("email"),
+        "action": "review_hidden",
+        "target_type": "review",
+        "target_id": review_id,
+        "details": {},
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    })
+    return {"status": "success"}
+
+@api_router.delete("/admin/reviews/{review_id}")
+async def admin_delete_review(review_id: str, current_user: dict = Depends(require_admin)):
+    await db.ratings.delete_one({"id": review_id})
+    await db.audit_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "admin_id": current_user["id"],
+        "admin_email": current_user.get("email"),
+        "action": "review_deleted",
+        "target_type": "review",
+        "target_id": review_id,
+        "details": {},
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    })
+    return {"status": "success"}
+
+@api_router.post("/admin/users")
+async def admin_create_user(payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    email = payload.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email requis")
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email déjà utilisé")
+    password = payload.get("password")
+    if not password:
+        password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    new_user = {
+        "id": str(uuid.uuid4()),
+        "email": email,
+        "password_hash": password_hash,
+        "role": payload.get("role", "admin"),
+        "first_name": payload.get("first_name", ""),
+        "last_name": payload.get("last_name", ""),
+        "verification_status": "verified",
+        "created_at": DateUtils.to_iso(DateUtils.now()),
+        "created_by": current_user["id"]
+    }
+    await db.users.insert_one(new_user)
+    await db.audit_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "admin_id": current_user["id"],
+        "admin_email": current_user.get("email"),
+        "action": "admin_created",
+        "target_type": "user",
+        "target_id": new_user["id"],
+        "target_email": email,
+        "details": {"role": new_user["role"]},
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    })
+    return {"status": "success", "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"}), "generated_password": password}
+
 @api_router.get("/admin/disputes")
 async def admin_disputes(current_user: dict = Depends(require_admin)):
     disputes = await db.disputes.find({}).to_list(100)
@@ -588,8 +1384,61 @@ async def create_dispute(payload: Dict[Any, Any], current_user: dict = Depends(r
 
 @api_router.get("/admin/notifications")
 async def admin_notifications(): return []
-@api_router.get("/admin/reviews")
-async def admin_reviews(): return []
+# Ratings & Reviews
+@api_router.post("/ratings")
+async def create_rating(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "hotel":
+        raise HTTPException(status_code=403, detail="Seuls les hôtels peuvent laisser des avis")
+    rating = {
+        "id": str(uuid.uuid4()),
+        "hotel_id": current_user["id"],
+        "hotel_name": current_user.get("hotel_name", ""),
+        "shift_id": payload.get("shift_id"),
+        "worker_id": payload.get("worker_id"),
+        "rating": payload.get("rating", 5),
+        "comment": payload.get("comment", ""),
+        "for_landing_page": payload.get("for_landing_page", False),
+        "verified": False,
+        "visible": True,
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    }
+    await db.ratings.insert_one(rating)
+    return clean_mongo_doc(rating)
+
+@api_router.get("/ratings/public")
+@api_router.get("/reviews")
+async def get_public_ratings(limit: int = Query(20), verified: Optional[bool] = Query(None)):
+    """Retourne les avis vérifiés pour la landing page"""
+    query = {"visible": True}
+    if verified is not None:
+        query["verified"] = verified
+    else:
+        query["verified"] = True  # Par défaut, uniquement les avis vérifiés
+    reviews = await db.ratings.find(query).sort("created_at", -1).to_list(limit)
+    return [clean_mongo_doc(r) for r in reviews]
+
+@api_router.get("/workers/{worker_id}/public")
+async def get_worker_public_profile(worker_id: str, current_user: dict = Depends(get_current_user)):
+    """Profil public d'un worker (pour les hôtels et admins)"""
+    worker = await db.users.find_one({"id": worker_id, "role": "worker"}, {"password_hash": 0})
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    worker = clean_mongo_doc(worker)
+    # Stats
+    total_completed = await db.applications.count_documents({"worker_id": worker_id, "status": ApplicationStatus.COMPLETED})
+    total_apps = await db.applications.count_documents({"worker_id": worker_id})
+    # Note moyenne
+    ratings = await db.ratings.find({"worker_id": worker_id, "verified": True}).to_list(100)
+    avg_rating = round(sum(r.get("rating", 0) for r in ratings) / len(ratings), 1) if ratings else None
+    worker["total_completed"] = total_completed
+    worker["total_applications"] = total_apps
+    worker["avg_rating"] = avg_rating
+    worker["ratings_count"] = len(ratings)
+    # Supprimer les infos sensibles
+    for key in ["date_of_birth", "address", "postal_code", "billing_address", "billing_postal_code", "iban", "bic"]:
+        worker.pop(key, None)
+    return worker
+
 @api_router.get("/admin/settings")
 async def admin_settings():
     settings = await db.settings.find_one({"type": "general"})
@@ -604,16 +1453,11 @@ async def update_admin_settings(payload: Dict[Any, Any], current_user: dict = De
 
 @api_router.get("/admin/revenue")
 async def admin_revenue(current_user: dict = Depends(require_admin)):
-    # Récupérer tous les shifts pour calculer le revenu potentiel (15% de commission)
     shifts = await db.shifts.find({}).to_list(None)
     total_revenue = 0
     for s in shifts:
-        # On suppose ici que le revenu est généré par shift (ou par application acceptée)
-        # Pour cet exemple, on calcule 15% de commission sur le taux horaire
-        # En prod, il faudrait multiplier par la durée et le nombre de positions
         rate = s.get("hourly_rate", 0)
         total_revenue += rate * 0.15
-        
     return {
         "total_revenue": round(total_revenue, 2),
         "commission_rate": 0.15

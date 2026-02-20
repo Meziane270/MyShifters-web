@@ -23,12 +23,12 @@ export default function UserSuspensionModal({ isOpen, onClose, user, isSuspended
 
         setLoading(true);
         try {
-            await axios.post(
-                `${API}/admin/suspensions`,
+            await axios.put(
+                `${API}/admin/users/${user.id}/suspend`,
                 {
-                    user_id: user.id,
+                    action: "suspend",
                     reason: reason.trim(),
-                    expires_in_days: expiresInDays ? parseInt(expiresInDays) : null
+                    duration_days: expiresInDays ? parseInt(expiresInDays) : 0
                 },
                 { headers: getAuthHeader() }
             );
@@ -49,23 +49,18 @@ export default function UserSuspensionModal({ isOpen, onClose, user, isSuspended
 
         setLoading(true);
         try {
-            // Récupérer la suspension active
-            const suspensions = await axios.get(`${API}/admin/suspensions/active`, {
-                headers: getAuthHeader()
-            });
-            const activeSuspension = suspensions.data.find(s => s.user_id === user.id);
-
-            if (activeSuspension) {
-                await axios.post(
-                    `${API}/admin/suspensions/${activeSuspension.id}/revoke`,
-                    { reason: reason.trim() },
-                    { headers: getAuthHeader() }
-                );
-                toast.success("Suspension levée");
-                onSuccess();
-                onClose();
-                setReason("");
-            }
+            await axios.put(
+                `${API}/admin/users/${user.id}/suspend`,
+                {
+                    action: "unsuspend",
+                    reason: reason.trim()
+                },
+                { headers: getAuthHeader() }
+            );
+            toast.success("Suspension levée");
+            onSuccess();
+            onClose();
+            setReason("");
         } catch (e) {
             toast.error(e?.response?.data?.detail || "Erreur lors de la révocation");
         } finally {

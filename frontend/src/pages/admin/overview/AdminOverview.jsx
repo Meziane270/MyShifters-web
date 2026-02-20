@@ -15,7 +15,8 @@ import {
     Shield, 
     Zap,
     ArrowUpRight,
-    BarChart3
+    BarChart3,
+    Star
 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -99,18 +100,18 @@ export default function AdminOverview() {
                             link="/admin/support"
                         />
                         <ActionCard 
-                            icon={<AlertTriangle className="text-red-500" />} 
-                            title="Litiges" 
-                            count={stats?.open_disputes ?? 0} 
-                            label="Conflits à régler" 
-                            link="/admin/disputes"
+                            icon={<Star className="text-yellow-500" />} 
+                            title="Avis" 
+                            count={stats?.pending_reviews ?? 0} 
+                            label="En attente de validation" 
+                            link="/admin/reviews"
                         />
                         <ActionCard 
                             icon={<Zap className="text-brand" />} 
                             title="Missions" 
                             count={stats?.shifts_today ?? 0} 
                             label="Créées aujourd'hui" 
-                            link="/admin/users"
+                            link="/admin/shifts"
                         />
                     </div>
                 </div>

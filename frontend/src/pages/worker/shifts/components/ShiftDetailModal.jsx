@@ -35,13 +35,15 @@ export default function ShiftDetailModal({ shift, application, isOpen, onClose, 
 
     const handleSubmit = useCallback(async () => {
         if (!shift?.id) return;
+        
         if (!isVerified) {
             toast.error("Votre profil doit être vérifié pour postuler.");
             return;
         }
+        
         setLoading(true);
         try {
-            await axios.post(
+            const res = await axios.post(
                 `${API}/applications`,
                 {
                     shift_id: shift.id,
@@ -49,12 +51,15 @@ export default function ShiftDetailModal({ shift, application, isOpen, onClose, 
                 },
                 { headers: getAuthHeader() }
             );
+            
             toast.success("Candidature envoyée avec succès !");
             onSuccess?.();
             onClose?.();
             setMessage("");
         } catch (e) {
-            toast.error(e?.response?.data?.detail || "Erreur lors de la candidature");
+            console.error("Erreur candidature:", e);
+            const errorMsg = e?.response?.data?.detail || "Erreur lors de la candidature. Veuillez réessayer.";
+            toast.error(errorMsg);
         } finally {
             setLoading(false);
         }
@@ -66,16 +71,20 @@ export default function ShiftDetailModal({ shift, application, isOpen, onClose, 
         
         let duration = 0;
         if (shift.start_time && shift.end_time) {
-            const [startH, startM] = shift.start_time.split(':').map(Number);
-            const [endH, endM] = shift.end_time.split(':').map(Number);
-            
-            let startMinutes = startH * 60 + startM;
-            let endMinutes = endH * 60 + endM;
-            
-            if (endMinutes <= startMinutes) {
-                endMinutes += 24 * 60; // Mission de nuit
+            try {
+                const [startH, startM] = shift.start_time.split(':').map(Number);
+                const [endH, endM] = shift.end_time.split(':').map(Number);
+                
+                let startMinutes = startH * 60 + startM;
+                let endMinutes = endH * 60 + endM;
+                
+                if (endMinutes <= startMinutes) {
+                    endMinutes += 24 * 60; // Mission de nuit
+                }
+                duration = (endMinutes - startMinutes) / 60;
+            } catch (e) {
+                duration = 0;
             }
-            duration = (endMinutes - startMinutes) / 60;
         }
         
         const days = Array.isArray(shift.dates) ? shift.dates.length : 1;

@@ -3,6 +3,15 @@ import { Save, Loader2, Camera, User } from "lucide-react";
 import { toast } from "sonner";
 
 export default function PersonalInfoForm({ profile, onSave, saving }) {
+    const verificationStatus = profile?.verification_status || 'pending';
+    const getVerifBadge = () => {
+        switch (verificationStatus) {
+            case 'verified': return { label: 'Vérifié', cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
+            case 'rejected': return { label: 'Rejeté', cls: 'bg-red-100 text-red-700 border-red-200' };
+            default: return { label: 'En cours de vérification', cls: 'bg-amber-100 text-amber-700 border-amber-200' };
+        }
+    };
+    const verifBadge = getVerifBadge();
     const [formData, setFormData] = useState({
         first_name: "",
         last_name: "",
@@ -45,13 +54,10 @@ export default function PersonalInfoForm({ profile, onSave, saving }) {
             return;
         }
 
-        // Pour Cloudinary, on envoie le fichier via FormData au backend
-        // Le backend doit s'occuper de l'upload vers Cloudinary
         const formDataFile = new FormData();
-        formDataFile.append('avatar', file);
+        formDataFile.append('file', file); // Changé de 'avatar' à 'file' pour correspondre au backend
         
         if (onSave) {
-            // On passe true pour indiquer que c'est un upload d'avatar
             await onSave(formDataFile, true);
         }
     };
@@ -91,6 +97,10 @@ export default function PersonalInfoForm({ profile, onSave, saving }) {
                 <div className="text-center">
                     <p className="text-lg font-black text-slate-900 tracking-tight">Votre Photo de Profil</p>
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">Format JPG ou PNG • Max 10 Mo</p>
+                    <span className={`inline-flex items-center gap-1.5 mt-3 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border ${verifBadge.cls}`}>
+                        <span className="h-1.5 w-1.5 rounded-full bg-current"></span>
+                        Statut : {verifBadge.label}
+                    </span>
                 </div>
             </div>
 

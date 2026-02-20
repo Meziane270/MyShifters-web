@@ -75,6 +75,19 @@ export default function AdminReviews() {
         }
     };
 
+    const handleVerifyReview = async (reviewId) => {
+        try {
+            await axios.put(
+                `${API}/admin/reviews/${reviewId}/verify`,
+                {},
+                { headers: getAuthHeader() }
+            );
+            toast.success("Avis vérifié — visible sur la landing page");
+            fetchReviews(pagination.page);
+        } catch (e) {
+            toast.error("Erreur lors de la vérification");
+        }
+    };
     const handleDeleteReview = async (reviewId) => {
         if (!window.confirm("Supprimer définitivement cet avis ?")) return;
 
@@ -128,7 +141,7 @@ export default function AdminReviews() {
                 <Table>
                     <TableHeader>
                         <TableRow className="hover:bg-transparent border-border">
-                            <TableHead className="text-foreground/70">Hôtel</TableHead>
+                                    <TableHead className="text-foreground/70">Auteur / Type</TableHead>
                             <TableHead className="text-foreground/70">Note</TableHead>
                             <TableHead className="text-foreground/70">Avis</TableHead>
                             <TableHead className="text-foreground/70">Date</TableHead>
@@ -154,8 +167,11 @@ export default function AdminReviews() {
                                 <TableRow key={review.id} className="border-border">
                                     <TableCell>
                                         <div className="font-medium text-foreground">
-                                            {review.hotel_name}
+                                            {review.hotel_name || review.worker_id || "Plateforme"}
                                         </div>
+                                        {review.for_landing_page && (
+                                            <span className="text-xs text-brand font-semibold">Landing page</span>
+                                        )}
                                     </TableCell>
                                     <TableCell>
                                         <div className="flex items-center gap-1">
@@ -181,11 +197,23 @@ export default function AdminReviews() {
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <div className="flex items-center justify-end gap-2">
+                                            {!review.verified && review.visible !== false && (
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="border-emerald-500/50 text-emerald-600 hover:bg-emerald-500/10"
+                                                    title="Vérifier et publier"
+                                                    onClick={() => handleVerifyReview(review.id)}
+                                                >
+                                                    <CheckCircle className="w-4 h-4" />
+                                                </Button>
+                                            )}
                                             {review.visible !== false && (
                                                 <Button
                                                     size="sm"
                                                     variant="outline"
                                                     className="border-border"
+                                                    title="Masquer"
                                                     onClick={() => handleHideReview(review.id)}
                                                 >
                                                     <EyeOff className="w-4 h-4" />
@@ -195,6 +223,7 @@ export default function AdminReviews() {
                                                 size="sm"
                                                 variant="outline"
                                                 className="border-red-500/50 text-red-600 hover:bg-red-500/10"
+                                                title="Supprimer"
                                                 onClick={() => handleDeleteReview(review.id)}
                                             >
                                                 <Trash2 className="w-4 h-4" />

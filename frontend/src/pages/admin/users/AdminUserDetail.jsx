@@ -30,17 +30,15 @@ import {
 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
-
 export default function AdminUserDetail() {
     const { userId } = useParams();
     const navigate = useNavigate();
     const { getAuthHeader } = useAuth();
-
     const [loading, setLoading] = useState(true);
     const [userData, setUserData] = useState(null);
     const [suspensionModalOpen, setSuspensionModalOpen] = useState(false);
     const [passwordResetModalOpen, setPasswordResetModalOpen] = useState(false);
-
+    const [updatingDoc, setUpdatingDoc] = useState(null);
     const fetchUser = useCallback(async () => {
         setLoading(true);
         try {
@@ -54,7 +52,19 @@ export default function AdminUserDetail() {
         } finally {
             setLoading(false);
         }
-    }, [userId, getAuthHeader, navigate]); // ← DÉPENDANCES
+    }, [userId, getAuthHeader, navigate]);
+    const handleDocumentAction = useCallback(async (docId, status) => {
+        setUpdatingDoc(docId);
+        try {
+            await axios.put(`${API}/admin/documents/${docId}/status`, { status }, { headers: getAuthHeader() });
+            toast.success(status === 'verified' ? 'Document approuvé' : 'Document rejeté');
+            fetchUser();
+        } catch (e) {
+            toast.error(e?.response?.data?.detail || 'Erreur lors de la mise à jour du document');
+        } finally {
+            setUpdatingDoc(null);
+        }
+    }, [getAuthHeader, fetchUser]);
     useEffect(() => {
         fetchUser();
     }, [fetchUser]);
@@ -70,7 +80,7 @@ export default function AdminUserDetail() {
     const { user } = userData;
     const isHotel = user.role === 'hotel';
     const isWorker = user.role === 'worker';
-    const isSuspended = userData.suspensions?.some(s => s.status === 'active');
+    const isSuspended = user.suspensions?.some(s => s.status === 'active');
 
     return (
         <div className="space-y-6">
@@ -120,7 +130,7 @@ export default function AdminUserDetail() {
                                 <div>
                                     <div className="text-xs text-foreground/60">Missions</div>
                                     <div className="font-medium text-foreground">
-                                        {userData.stats?.shifts_completed || 0}
+                                        {user.total_completed || 0}
                                     </div>
                                 </div>
                             </div>
@@ -133,7 +143,7 @@ export default function AdminUserDetail() {
                                 <div>
                                     <div className="text-xs text-foreground/60">Gagné</div>
                                     <div className="font-medium text-foreground">
-                                        {userData.stats?.total_earned?.toLocaleString() || 0} €
+                                        {user.total_earned?.toLocaleString() || 0} €
                                     </div>
                                 </div>
                             </div>
@@ -151,7 +161,7 @@ export default function AdminUserDetail() {
                                 <div>
                                     <div className="text-xs text-foreground/60">Shifts créés</div>
                                     <div className="font-medium text-foreground">
-                                        {userData.stats?.shifts_created || 0}
+                                        {user.total_shifts || 0}
                                     </div>
                                 </div>
                             </div>
@@ -164,7 +174,7 @@ export default function AdminUserDetail() {
                                 <div>
                                     <div className="text-xs text-foreground/60">Dépensé</div>
                                     <div className="font-medium text-foreground">
-                                        {userData.stats?.total_spent?.toLocaleString() || 0} €
+                                        {user.total_spent?.toLocaleString() || 0} €
                                     </div>
                                 </div>
                             </div>
@@ -303,21 +313,21 @@ export default function AdminUserDetail() {
                         </div>
                     )}
 
-                    {isHotel && userData.business_profile && (
+                    {isHotel && user.business_profile && (
                         <div className="bg-card border border-border rounded-xl p-6">
                             <h3 className="font-semibold text-foreground mb-4">Informations entreprise</h3>
                             <div className="space-y-3">
                                 <div>
                                     <div className="text-xs text-foreground/60">Nom de l'entreprise</div>
-                                    <div className="text-foreground">{userData.business_profile.business_name}</div>
+                                    <div className="text-foreground">{user.business_profile.business_name}</div>
                                 </div>
                                 <div>
                                     <div className="text-xs text-foreground/60">SIRET</div>
-                                    <div className="text-foreground">{userData.business_profile.siret}</div>
+                                    <div className="text-foreground">{user.business_profile.siret}</div>
                                 </div>
                                 <div>
                                     <div className="text-xs text-foreground/60">Adresse</div>
-                                    <div className="text-foreground">{userData.business_profile.business_address}</div>
+                                    <div className="text-foreground">{user.business_profile.business_address}</div>
                                 </div>
                             </div>
                         </div>
@@ -328,12 +338,12 @@ export default function AdminUserDetail() {
                     <TabsContent value="documents">
                         <div className="bg-card border border-border rounded-xl p-6">
                             <h3 className="font-semibold text-foreground mb-4">Documents fournis</h3>
-                            {userData.documents?.length === 0 ? (
+                            {user.documents?.length === 0 ? (
                                 <p className="text-foreground/70">Aucun document</p>
                             ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {userData.documents?.map((doc) => (
-                                        <div key={doc.id} className="p-4 bg-background rounded-lg border border-border">
+                                    {user.documents?.map((doc) => (
+                                        <div key={doc.id} className="p-4 bg-background rounded-lg border border-border space-y-3">
                                             <div className="flex items-center gap-3">
                                                 <FileText className="w-5 h-5 text-foreground/70" />
                                                 <div className="flex-1 min-w-0">
@@ -344,10 +354,40 @@ export default function AdminUserDetail() {
                                                         {doc.type === 'identity' && 'Pièce d\'identité'}
                                                     </div>
                                                     <div className="text-xs text-foreground/50">
-                                                        {doc.status === 'pending' ? 'En attente' : 'Vérifié'}
+                                                        {doc.status === 'pending' ? 'En attente' : doc.status === 'verified' ? 'Vérifié' : 'Rejeté'}
                                                     </div>
                                                 </div>
                                                 <StatusPill status={doc.status} />
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                {doc.url && (
+                                                    <a href={doc.url} target="_blank" rel="noopener noreferrer" className="text-xs text-brand hover:underline flex items-center gap-1">
+                                                        <FileText className="w-3 h-3" /> Voir le fichier
+                                                    </a>
+                                                )}
+                                                <div className="flex-1" />
+                                                {doc.status !== 'verified' && (
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        className="border-emerald-500/50 text-emerald-600 hover:bg-emerald-500/10 text-xs h-7 px-2"
+                                                        onClick={() => handleDocumentAction(doc.id, 'verified')}
+                                                        disabled={updatingDoc === doc.id}
+                                                    >
+                                                        {updatingDoc === doc.id ? '...' : 'Approuver'}
+                                                    </Button>
+                                                )}
+                                                {doc.status !== 'rejected' && (
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        className="border-red-500/50 text-red-600 hover:bg-red-500/10 text-xs h-7 px-2"
+                                                        onClick={() => handleDocumentAction(doc.id, 'rejected')}
+                                                        disabled={updatingDoc === doc.id}
+                                                    >
+                                                        {updatingDoc === doc.id ? '...' : 'Rejeter'}
+                                                    </Button>
+                                                )}
                                             </div>
                                         </div>
                                     ))}
@@ -361,22 +401,22 @@ export default function AdminUserDetail() {
                     <TabsContent value="paiement">
                         <div className="bg-card border border-border rounded-xl p-6">
                             <h3 className="font-semibold text-foreground mb-4">Compte de paiement</h3>
-                            {userData.payout_account ? (
+                            {user.payout_account ? (
                                 <div className="space-y-3">
                                     <div>
                                         <div className="text-xs text-foreground/60">IBAN</div>
                                         <div className="text-foreground font-mono">
-                                            {userData.payout_account.iban}
+                                            {user.payout_account.iban}
                                         </div>
                                     </div>
                                     <div>
                                         <div className="text-xs text-foreground/60">BIC</div>
                                         <div className="text-foreground font-mono">
-                                            {userData.payout_account.bic}
+                                            {user.payout_account.bic}
                                         </div>
                                     </div>
                                     <div className="pt-2">
-                                        <StatusPill status={userData.payout_account.status} />
+                                        <StatusPill status={user.payout_account.status} />
                                     </div>
                                 </div>
                             ) : (
@@ -390,11 +430,11 @@ export default function AdminUserDetail() {
                     <TabsContent value="experiences">
                         <div className="bg-card border border-border rounded-xl p-6">
                             <h3 className="font-semibold text-foreground mb-4">Expériences professionnelles</h3>
-                            {userData.experiences?.length === 0 ? (
+                            {user.experiences?.length === 0 ? (
                                 <p className="text-foreground/70">Aucune expérience</p>
                             ) : (
                                 <div className="space-y-4">
-                                    {userData.experiences?.map((exp) => (
+                                    {user.experiences?.map((exp) => (
                                         <div key={exp.id} className="p-4 bg-background rounded-lg border border-border">
                                             <div className="font-medium text-foreground">{exp.role_title}</div>
                                             <div className="text-sm text-foreground/70">{exp.company}</div>
@@ -415,11 +455,11 @@ export default function AdminUserDetail() {
                 <TabsContent value="suspensions">
                     <div className="bg-card border border-border rounded-xl p-6">
                         <h3 className="font-semibold text-foreground mb-4">Historique des suspensions</h3>
-                        {userData.suspensions?.length === 0 ? (
+                        {user.suspensions?.length === 0 ? (
                             <p className="text-foreground/70">Aucune suspension</p>
                         ) : (
                             <div className="space-y-4">
-                                {userData.suspensions?.map((s) => (
+                                {user.suspensions?.map((s) => (
                                     <div key={s.id} className="p-4 bg-background rounded-lg border border-border">
                                         <div className="flex items-center justify-between">
                                             <div className="flex items-center gap-2">
@@ -447,11 +487,11 @@ export default function AdminUserDetail() {
                 <TabsContent value="audit">
                     <div className="bg-card border border-border rounded-xl p-6">
                         <h3 className="font-semibold text-foreground mb-4">Journal d'audit</h3>
-                        {userData.audit_log?.length === 0 ? (
+                        {user.audit_log?.length === 0 ? (
                             <p className="text-foreground/70">Aucune action enregistrée</p>
                         ) : (
                             <div className="space-y-3">
-                                {userData.audit_log?.map((log) => (
+                                {user.audit_log?.map((log) => (
                                     <div key={log.id} className="p-3 bg-background rounded-lg border border-border">
                                         <div className="flex items-center justify-between">
                                             <span className="text-sm font-medium text-foreground">

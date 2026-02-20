@@ -23,7 +23,7 @@ export default function PasswordResetModal({ isOpen, onClose, user, onSuccess })
                 {},
                 { headers: getAuthHeader() }
             );
-            setTempPassword(res.data.temp_password);
+            setTempPassword(res.data.new_password || res.data.temp_password);
             toast.success("Mot de passe réinitialisé");
             onSuccess();
         } catch (e) {

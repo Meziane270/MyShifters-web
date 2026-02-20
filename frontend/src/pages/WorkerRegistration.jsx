@@ -285,116 +285,115 @@ export default function WorkerRegistration({
                     true
                 );
             } else {
-                // Même adresse : les champs doivent être remplis (ils le sont via la copie)
-                newErrors.billing_address = validateBillingAddress(
-                    formData.billing_address,
-                    true
-                );
-                newErrors.billing_city = validateBillingCity(formData.billing_city, true);
-                newErrors.billing_postal_code = validateBillingPostalCode(
-                    formData.billing_postal_code,
-                    true
-                );
+                newErrors.billing_address = null;
+                newErrors.billing_city = null;
+                newErrors.billing_postal_code = null;
             }
         }
         newErrors.cv_pdf = validateCvFile(formData.cv_pdf);
+
         setErrors((prev) => ({ ...prev, ...newErrors }));
         return Object.values(newErrors).every((e) => e === null);
     };
 
     // ====================================================
-    // MESSAGES D'ERREUR LOCALISÉS
+    // MESSAGES D'ERREUR
     // ====================================================
-    const getErrorMessage = (field, errorCode) => {
-        if (!errorCode) return null;
-        const key = `validation.${field}.${errorCode}`;
-        return copy[key] || `${field} error: ${errorCode}`;
+    const getErrorMessage = (field, errorType) => {
+        if (!errorType) return null;
+
+        const messages = {
+            first_name: {
+                required: lang === "en" ? "First name is required" : "Le prénom est requis",
+                minLength: lang === "en" ? "At least 2 characters" : "Au moins 2 caractères",
+            },
+            last_name: {
+                required: lang === "en" ? "Last name is required" : "Le nom est requis",
+                minLength: lang === "en" ? "At least 2 characters" : "Au moins 2 caractères",
+            },
+            email: {
+                required: lang === "en" ? "Email is required" : "L'email est requis",
+                format: lang === "en" ? "Invalid email format" : "Format d'email invalide",
+            },
+            phone: {
+                format: lang === "en" ? "Invalid phone format" : "Format de téléphone invalide",
+            },
+            password: {
+                required: lang === "en" ? "Password is required" : "Le mot de passe est requis",
+                minLength: lang === "en" ? "At least 8 characters" : "Au moins 8 caractères",
+            },
+            confirmPassword: {
+                required: lang === "en" ? "Please confirm password" : "Veuillez confirmer le mot de passe",
+                mismatch: lang === "en" ? "Passwords do not match" : "Les mots de passe ne correspondent pas",
+            },
+            date_of_birth: {
+                required: lang === "en" ? "Birth date is required" : "La date de naissance est requise",
+                format: lang === "en" ? "Invalid date format" : "Format de date invalide",
+                future: lang === "en" ? "Cannot be in the future" : "Ne peut pas être dans le futur",
+            },
+            city: {
+                required: lang === "en" ? "City is required" : "La ville est requise",
+            },
+            postal_code: {
+                required: lang === "en" ? "Postal code is required" : "Le code postal est requis",
+                format: lang === "en" ? "Must be 5 digits" : "Doit contenir 5 chiffres",
+            },
+            siret: {
+                required: lang === "en" ? "SIRET is required" : "Le SIRET est requis",
+                format: lang === "en" ? "Must be 14 digits" : "Doit contenir 14 chiffres",
+            },
+            billing_address: {
+                required: lang === "en" ? "Billing address is required" : "L'adresse de facturation est requise",
+            },
+            billing_city: {
+                required: lang === "en" ? "Billing city is required" : "La ville de facturation est requise",
+            },
+            billing_postal_code: {
+                required: lang === "en" ? "Billing postal code is required" : "Le code postal de facturation est requis",
+                format: lang === "en" ? "Must be 5 digits" : "Doit contenir 5 chiffres",
+            },
+            cv_pdf: {
+                required: lang === "en" ? "Resume is required" : "Le CV est requis",
+            },
+        };
+
+        return messages[field]?.[errorType] || "Erreur";
     };
 
     // ====================================================
-    // VALIDATION DES ÉTAPES
+    // NAVIGATION
     // ====================================================
-    const isStep1Valid = useMemo(() => {
-        if (workerStep !== 1) return true;
-        const fields = [
-            { field: "first_name", value: formData.first_name },
-            { field: "last_name", value: formData.last_name },
-            { field: "email", value: formData.email },
-            { field: "phone", value: formData.phone },
-            { field: "password", value: formData.password },
-            { field: "confirmPassword", value: formData.confirmPassword, extra: formData.password },
-            { field: "date_of_birth", value: formData.date_of_birth },
-            { field: "city", value: formData.city },
-            { field: "postal_code", value: formData.postal_code },
-        ];
-        return fields.every(({ field, value, extra }) => {
-            const error = getFieldError(field, value, extra);
-            return error === null;
-        });
-    }, [
-        workerStep,
-        formData.first_name,
-        formData.last_name,
-        formData.email,
-        formData.phone,
-        formData.password,
-        formData.confirmPassword,
-        formData.date_of_birth,
-        formData.city,
-        formData.postal_code,
-    ]);
+    const handleNext = () => {
+        if (workerStep === 1) {
+            // Valider tous les champs de l'étape 1
+            const newErrors = {};
+            Object.keys(validators).forEach((key) => {
+                newErrors[key] = getFieldError(
+                    key,
+                    formData[key],
+                    key === "confirmPassword" ? formData.password : null
+                );
+            });
+            setErrors(newErrors);
+            setTouched(
+                Object.keys(validators).reduce((acc, key) => ({ ...acc, [key]: true }), {})
+            );
 
-    const isStep2Valid = useMemo(() => {
-        if (workerStep !== 2) return true;
-
-        // CV toujours requis
-        if (!formData.cv_pdf) return false;
-
-        // Si pas AE, seulement le CV est requis
-        if (!formData.has_ae_status) {
-            return formData.cv_pdf !== null;
+            if (Object.values(newErrors).every((e) => e === null)) {
+                setWorkerStep(2);
+                window.scrollTo(0, 0);
+            }
         }
+    };
 
-        // AE activé : SIRET requis et valide
-        const siretValid = validateSiret(formData.siret, true) === null;
-        if (!siretValid) return false;
-
-        // Adresse de facturation
-        if (formData.same_as_personal) {
-            // Les champs sont copiés, ils doivent être remplis (vérifier non vides)
-            const addrOk =
-                formData.billing_address?.trim() !== "" &&
-                formData.billing_city?.trim() !== "" &&
-                formData.billing_postal_code?.trim() !== "" &&
-                validateBillingPostalCode(formData.billing_postal_code, true) === null;
-            return addrOk;
-        } else {
-            // Champs libres, tous requis et valides
-            const addrOk =
-                formData.billing_address?.trim() !== "" &&
-                formData.billing_city?.trim() !== "" &&
-                formData.billing_postal_code?.trim() !== "" &&
-                validateBillingPostalCode(formData.billing_postal_code, true) === null;
-            return addrOk;
+    const handlePrev = () => {
+        if (workerStep === 2) {
+            setWorkerStep(1);
+            window.scrollTo(0, 0);
         }
-    }, [
-        workerStep,
-        formData.cv_pdf,
-        formData.has_ae_status,
-        formData.siret,
-        formData.same_as_personal,
-        formData.billing_address,
-        formData.billing_city,
-        formData.billing_postal_code,
-    ]);
+    };
 
-    const isNextDisabled = useMemo(() => {
-        if (workerStep === 1) return !isStep1Valid;
-        if (workerStep === 2) return !isStep2Valid;
-        return false;
-    }, [workerStep, isStep1Valid, isStep2Valid]);
-
-    // Initialisation des champs de facturation si "same_as_personal" est coché au chargement
+    // Synchronisation automatique de l'adresse de facturation si "same_as_personal" est coché
     useEffect(() => {
         if (workerStep === 2 && formData.same_as_personal) {
             setFormData((prev) => ({
@@ -451,7 +450,6 @@ export default function WorkerRegistration({
                 {/* ========== STEP 1 ========== */}
                 {workerStep === 1 && (
                     <>
-
                         {/* Champs d'identité */}
                         <div className="grid gap-5 sm:grid-cols-2">
 
@@ -675,36 +673,16 @@ export default function WorkerRegistration({
                                         onBlur={() => handleBlur("date_of_birth")}
                                         required
                                         aria-invalid={!!errors.date_of_birth}
-                                        aria-describedby={errors.date_of_birth ? "dob-error" : "dob-help"}
-                                        className={`pr-10 ${touched.date_of_birth && errors.date_of_birth ? "border-red-500" : ""}`}
+                                        aria-describedby={
+                                            errors.date_of_birth ? "dob-error" : undefined
+                                        }
+                                        className={
+                                            touched.date_of_birth && errors.date_of_birth
+                                                ? "border-red-500"
+                                                : ""
+                                        }
                                     />
-
-                                    {/* calendar icon (lucide-react) */}
-                                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-foreground/50">
-                                              <svg
-                                                  xmlns="http://www.w3.org/2000/svg"
-                                                  width="18"
-                                                  height="18"
-                                                  viewBox="0 0 24 24"
-                                                  fill="none"
-                                                  stroke="currentColor"
-                                                  strokeWidth="2"
-                                                  strokeLinecap="round"
-                                                  strokeLinejoin="round"
-                                              >
-                                                <path d="M8 2v4M16 2v4" />
-                                                <rect width="18" height="18" x="3" y="4" rx="2" />
-                                                <path d="M3 10h18" />
-                                              </svg>
-                                            </span>
                                 </div>
-
-                                {!errors.date_of_birth && (
-                                    <p id="dob-help" className="text-xs text-foreground/60">
-                                        Format : JJ/MM/AAAA
-                                    </p>
-                                )}
-
                                 {touched.date_of_birth && errors.date_of_birth && (
                                     <p id="dob-error" className="text-xs text-red-500">
                                         {getErrorMessage("date_of_birth", errors.date_of_birth)}
@@ -712,64 +690,71 @@ export default function WorkerRegistration({
                                 )}
                             </div>
 
-
-                            {/* Adresse (optionnelle) */}
+                            {/* Adresse personnelle */}
                             <div className="space-y-2 sm:col-span-2">
-                                <Label htmlFor="address">{copy.address || "Adresse"}</Label>
+                                <Label htmlFor="address">{copy.address || "Adresse personnelle"}</Label>
                                 <Input
                                     id="address"
                                     type="text"
-                                    placeholder={lang === "en" ? "Your address" : "Votre adresse"}
+                                    placeholder={copy.placeholders?.address || "123 Rue de Paris"}
                                     value={formData.address || ""}
-                                    onChange={(e) => setFormData((p) => ({ ...p, address: e.target.value }))}
+                                    onChange={(e) => handleChange("address", e.target.value)}
+                                    onBlur={() => handleBlur("address")}
+                                    required
+                                    aria-invalid={!!errors.address}
+                                    aria-describedby={errors.address ? "address-error" : undefined}
+                                    className={touched.address && errors.address ? "border-red-500" : ""}
                                 />
+                                {touched.address && errors.address && (
+                                    <p id="address-error" className="text-xs text-red-500">
+                                        {getErrorMessage("address", errors.address)}
+                                    </p>
+                                )}
                             </div>
 
                             {/* Ville + Code postal */}
-                            <div className="space-y-2 sm:col-span-2">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div className="space-y-2">
-                                        <Label htmlFor="city">{copy.city || "Ville"}</Label>
-                                        <Input
-                                            id="city"
-                                            type="text"
-                                            placeholder={copy.placeholders?.city || "Paris"}
-                                            value={formData.city || ""}
-                                            onChange={(e) => handleChange("city", e.target.value)}
-                                            onBlur={() => handleBlur("city")}
-                                            required
-                                            aria-invalid={!!errors.city}
-                                            aria-describedby={errors.city ? "city-error" : undefined}
-                                            className={touched.city && errors.city ? "border-red-500" : ""}
-                                        />
-                                        {touched.city && errors.city && (
-                                            <p id="city-error" className="text-xs text-red-500">
-                                                {getErrorMessage("city", errors.city)}
-                                            </p>
-                                        )}
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label htmlFor="postal_code">{copy.postal_code || "Code postal"}</Label>
-                                        <Input
-                                            id="postal_code"
-                                            type="text"
-                                            placeholder={copy.placeholders?.postal_code || "75001"}
-                                            value={formData.postal_code || ""}
-                                            onChange={(e) => handleChange("postal_code", e.target.value)}
-                                            onBlur={() => handleBlur("postal_code")}
-                                            required
-                                            aria-invalid={!!errors.postal_code}
-                                            aria-describedby={errors.postal_code ? "postal-code-error" : undefined}
-                                            className={touched.postal_code && errors.postal_code ? "border-red-500" : ""}
-                                        />
-                                        {touched.postal_code && errors.postal_code && (
-                                            <p id="postal-code-error" className="text-xs text-red-500">
-                                                {getErrorMessage("postal_code", errors.postal_code)}
-                                            </p>
-                                        )}
-                                    </div>
-                                </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="city">{copy.city || "Ville"}</Label>
+                                <Input
+                                    id="city"
+                                    type="text"
+                                    placeholder={copy.placeholders?.city || "Paris"}
+                                    value={formData.city || ""}
+                                    onChange={(e) => handleChange("city", e.target.value)}
+                                    onBlur={() => handleBlur("city")}
+                                    required
+                                    aria-invalid={!!errors.city}
+                                    aria-describedby={errors.city ? "city-error" : undefined}
+                                    className={touched.city && errors.city ? "border-red-500" : ""}
+                                />
+                                {touched.city && errors.city && (
+                                    <p id="city-error" className="text-xs text-red-500">
+                                        {getErrorMessage("city", errors.city)}
+                                    </p>
+                                )}
                             </div>
+
+                            <div className="space-y-2">
+                                <Label htmlFor="postal_code">{copy.postal_code || "Code postal"}</Label>
+                                <Input
+                                    id="postal_code"
+                                    type="text"
+                                    placeholder={copy.placeholders?.postal_code || "75001"}
+                                    value={formData.postal_code || ""}
+                                    onChange={(e) => handleChange("postal_code", e.target.value)}
+                                    onBlur={() => handleBlur("postal_code")}
+                                    required
+                                    aria-invalid={!!errors.postal_code}
+                                    aria-describedby={errors.postal_code ? "postal-code-error" : undefined}
+                                    className={touched.postal_code && errors.postal_code ? "border-red-500" : ""}
+                                />
+                                {touched.postal_code && errors.postal_code && (
+                                    <p id="postal-code-error" className="text-xs text-red-500">
+                                        {getErrorMessage("postal_code", errors.postal_code)}
+                                    </p>
+                                )}
+                            </div>
+
                         </div>
                     </>
                 )}
@@ -777,25 +762,58 @@ export default function WorkerRegistration({
                 {/* ========== STEP 2 ========== */}
                 {workerStep === 2 && (
                     <div className="space-y-6">
-                        {/* Toggle AE (switch right + OUI/NON) */}
-                        <div className="flex items-center justify-between gap-4 rounded-2xl border bg-background/40 px-4 py-3">
-                            <Label htmlFor="has_ae_status" className="text-sm sm:text-base font-medium">
-                                {copy.has_ae_status || "Avez-vous le statut AE (auto-entrepreneur) ?"}
-                            </Label>
 
+                        {/* Compétences (Skills) - DÉPLACÉ ICI */}
+                        <div className="space-y-3 pb-6 border-b">
+                            <Label className="text-base font-bold">
+                                {lang === "en" ? "My Skills / Roles" : "Mes Métiers / Compétences"}
+                            </Label>
+                            <p className="text-xs text-foreground/60 mb-4">
+                                {lang === "en" 
+                                    ? "Select at least one role to see available missions." 
+                                    : "Sélectionnez au moins un métier pour voir les missions disponibles."}
+                            </p>
+                            <div className="grid grid-cols-2 gap-3">
+                                {(SERVICE_TYPES || [
+                                    { id: 'reception', label: 'Réception', icon: '🛎️' },
+                                    { id: 'housekeeping', label: 'Housekeeping', icon: '🧹' },
+                                    { id: 'maintenance', label: 'Maintenance', icon: '🛠️' },
+                                    { id: 'restaurant', label: 'Restauration', icon: '🍽️' }
+                                ]).map((s) => (
+                                    <button
+                                        key={s.id}
+                                        type="button"
+                                        onClick={() => handleSkillToggle(s.id)}
+                                        className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border transition-all ${
+                                            (formData.skills || []).includes(s.id)
+                                                ? "bg-brand/10 border-brand text-brand shadow-sm"
+                                                : "bg-background/40 border-foreground/10 text-foreground/60 hover:border-foreground/20"
+                                        }`}
+                                    >
+                                        <span className="text-2xl">{s.icon}</span>
+                                        <span className="text-xs font-semibold">{s.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Statut AE Toggle */}
+                        <div className="flex items-center justify-between rounded-2xl border bg-background/40 p-4">
+                            <div className="space-y-0.5">
+                                <Label className="text-base">Statut AE</Label>
+                                <p className="text-xs text-foreground/60">
+                                    {copy.has_ae_status || "Avez-vous le statut auto-entrepreneur ?"}
+                                </p>
+                            </div>
                             <button
-                                id="has_ae_status"
                                 type="button"
-                                role="switch"
-                                aria-checked={!!formData.has_ae_status}
                                 onClick={() => handleAEToggle(!formData.has_ae_status)}
                                 className={`
-                                          relative inline-flex h-10 w-28 items-center rounded-full border transition
-                                          ${formData.has_ae_status ? "bg-emerald-500/20 border-emerald-500/30" : "bg-background/60 border-border"}
-                                          focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50
-                                        `}
+                                  relative inline-flex h-10 w-24 items-center rounded-full transition-colors outline-none
+                                  ${formData.has_ae_status ? "bg-blue-600" : "bg-foreground/10"}
+                                `}
                             >
-                                {/* knob */}
+                                {/* handle */}
                                 <span
                                     className={`
                                                 absolute top-1/2 -translate-y-1/2 h-8 w-12 rounded-full bg-background shadow-sm transition-transform
@@ -958,81 +976,60 @@ export default function WorkerRegistration({
 
                 {/* ========== BOUTONS DE NAVIGATION ========== */}
                 <div className="flex flex-col gap-3 pt-2 sm:flex-row">
-                                    {/* Compétences (Skills) - Ajouté pour corriger la visibilité des missions */}
-                                    <div className="space-y-3 pt-4 border-t">
-                                        <Label className="text-base font-bold">
-                                            {lang === "en" ? "My Skills / Roles" : "Mes Métiers / Compétences"}
-                                        </Label>
-                                        <p className="text-xs text-foreground/60 mb-4">
-                                            {lang === "en" 
-                                                ? "Select at least one role to see available missions." 
-                                                : "Sélectionnez au moins un métier pour voir les missions disponibles."}
-                                        </p>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            {(SERVICE_TYPES || [
-                                                { id: 'reception', label: 'Réception', icon: '🛎️' },
-                                                { id: 'housekeeping', label: 'Housekeeping', icon: '🧹' },
-                                                { id: 'maintenance', label: 'Maintenance', icon: '🛠️' },
-                                                { id: 'restaurant', label: 'Restauration', icon: '🍽️' }
-                                            ]).map((s) => (
-                                                <button
-                                                    key={s.id}
-                                                    type="button"
-                                                    onClick={() => handleSkillToggle(s.id)}
-                                                    className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border transition-all ${
-                                                        (formData.skills || []).includes(s.id)
-                                                            ? "bg-brand/10 border-brand text-brand shadow-sm"
-                                                            : "bg-background border-border text-muted-foreground hover:border-brand/30"
-                                                    }`}
-                                                >
-                                                    <span className="text-2xl">{s.icon}</span>
-                                                    <span className="text-xs font-bold text-center">{s.label}</span>
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {workerStep === 1 ? (
-                        <Button type="button" variant="outline" onClick={onBack} className="sm:flex-1">
-                            {copy.back}
-                        </Button>
-                    ) : (
+                    {workerStep === 1 ? (
                         <Button
                             type="button"
-                            variant="outline"
-                            onClick={() => setWorkerStep((s) => Math.max(1, s - 1))}
-                            className="sm:flex-1"
-                        >
-                            {workerPrevLabel}
-                        </Button>
-                    )}
-
-                    {workerStep < workerTotalSteps ? (
-                        <Button
-                            type="button"
-                            disabled={isNextDisabled}
-                            onClick={() => setWorkerStep((s) => Math.min(workerTotalSteps, s + 1))}
-                            className="sm:flex-1"
+                            onClick={handleNext}
+                            className="h-12 w-full rounded-2xl bg-foreground text-background hover:bg-foreground/90 sm:flex-1"
                         >
                             {workerNextLabel}
                         </Button>
                     ) : (
-                        <Button type="submit" disabled={loading || !isStep2Valid} className="sm:flex-1">
-                            {loading ? (
-                                <span className="inline-flex items-center gap-2">
-                                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                                    {lang === "en" ? "Creating..." : "Création..."}
-                                </span>
-                            ) : (
-                                copy.submit
-                            )}
-                        </Button>
+                        <>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={handlePrev}
+                                className="h-12 w-full rounded-2xl border-foreground/10 hover:bg-foreground/5 sm:w-1/3"
+                            >
+                                {workerPrevLabel}
+                            </Button>
+                            <Button
+                                type="submit"
+                                disabled={loading}
+                                className="h-12 w-full rounded-2xl bg-foreground text-background hover:bg-foreground/90 sm:flex-1"
+                            >
+                                {loading ? (
+                                    <span className="inline-flex items-center gap-2">
+                                        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                                            <circle
+                                                className="opacity-25"
+                                                cx="12"
+                                                cy="12"
+                                                r="10"
+                                                stroke="currentColor"
+                                                strokeWidth="4"
+                                                fill="none"
+                                            />
+                                            <path
+                                                className="opacity-75"
+                                                fill="currentColor"
+                                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                                            />
+                                        </svg>
+                                        {lang === "en" ? "Processing..." : "Chargement..."}
+                                    </span>
+                                ) : (
+                                    copy.submit
+                                )}
+                            </Button>
+                        </>
                     )}
                 </div>
 
-                <p className="pt-2 text-center text-sm text-foreground/70">
+                <p className="text-center text-sm text-foreground/60">
                     {copy.hasAccount}{" "}
-                    <Link to="/login" className="font-semibold text-blue-400 hover:underline">
+                    <Link to="/login" className="font-semibold text-foreground hover:underline">
                         {copy.login}
                     </Link>
                 </p>

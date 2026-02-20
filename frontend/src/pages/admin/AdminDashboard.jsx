@@ -20,6 +20,7 @@ import AdminRevenue from "./revenue/AdminRevenue";
 import AdminSettings from "./settings/AdminSettings";
 import AdminAuditLog from "./audit/AdminAuditLog";
 import AdminNotifications from "./notifications/AdminNotifications";
+import AdminShifts from "./shifts/AdminShifts";
 
 export default function AdminDashboard() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -52,6 +53,7 @@ export default function AdminDashboard() {
                         <Route path="settings" element={<AdminSettings />} />
                         <Route path="audit" element={<AdminAuditLog />} />
                         <Route path="notifications" element={<AdminNotifications />} />
+                        <Route path="shifts" element={<AdminShifts />} />
                     </Routes>
                 </div>
             </main>

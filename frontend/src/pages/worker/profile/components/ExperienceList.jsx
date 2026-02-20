@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Briefcase, Trash2, Plus, Loader2, Save, Calendar, Building2 } from "lucide-react";
+import { Briefcase, Trash2, Plus, Loader2, Save, Calendar, Building2, BadgeCheck } from "lucide-react";
 
 const SERVICE_TYPES = [
     { id: 'reception', label: 'Réception', icon: '🛎️' },
@@ -8,7 +8,7 @@ const SERVICE_TYPES = [
     { id: 'restaurant', label: 'Restauration & Salle', icon: '🍽️' }
 ];
 
-export default function ExperienceList({ experiences = [], onAddExperience, onDeleteExperience, saving }) {
+export default function ExperienceList({ experiences = [], workerSkills = [], onAddExperience, onDeleteExperience, saving }) {
     const [showAddForm, setShowAddForm] = useState(false);
     const [newExp, setNewExp] = useState({
         company: "",
@@ -23,7 +23,6 @@ export default function ExperienceList({ experiences = [], onAddExperience, onDe
     const handleSubmit = (e) => {
         e.preventDefault();
         if (typeof onAddExperience === 'function') {
-            // S'assurer que role_title est bien passé au backend
             onAddExperience(newExp);
             setShowAddForm(false);
             setNewExp({
@@ -38,8 +37,41 @@ export default function ExperienceList({ experiences = [], onAddExperience, onDe
         }
     };
 
+    const getSkillLabel = (skillId) => {
+        const skill = SERVICE_TYPES.find(s => s.id === skillId);
+        return skill ? skill.label : skillId;
+    };
+
     return (
         <div className="p-10 space-y-12">
+            {/* Section Métiers Choisis - AJOUTÉ ICI */}
+            <div className="space-y-6">
+                <div className="flex items-center gap-4">
+                    <div className="h-12 w-12 rounded-2xl bg-brand/10 text-brand flex items-center justify-center">
+                        <BadgeCheck className="h-6 w-6" />
+                    </div>
+                    <div>
+                        <h3 className="text-xl font-black text-slate-900 tracking-tight">Métiers Choisis</h3>
+                        <p className="text-sm text-slate-500">Ces métiers correspondent aux choix faits lors de votre inscription.</p>
+                    </div>
+                </div>
+                
+                <div className="flex flex-wrap gap-3">
+                    {workerSkills && workerSkills.length > 0 ? (
+                        workerSkills.map((skillId) => (
+                            <div key={skillId} className="px-6 py-3 bg-brand/5 border border-brand/10 rounded-xl text-brand font-bold text-xs">
+                                {getSkillLabel(skillId)}
+                            </div>
+                        ))
+                    ) : (
+                        <p className="text-sm text-slate-400 italic">Aucun métier sélectionné.</p>
+                    )}
+                </div>
+            </div>
+
+            <div className="h-px bg-slate-100 w-full" />
+
+            {/* Section Expériences */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                     <div className="h-12 w-12 rounded-2xl bg-brand/10 text-brand flex items-center justify-center">

@@ -11,7 +11,8 @@ import {
     DollarSign,
     Settings,
     ClipboardList,
-    Bell
+    Bell,
+    Briefcase
 } from "lucide-react";
 
 export default function Sidebar({ isOpen, setIsOpen }) {
@@ -23,7 +24,7 @@ export default function Sidebar({ isOpen, setIsOpen }) {
         { path: "/admin", label: "Overview", icon: LayoutDashboard, exact: true },
         { path: "/admin/verifications", label: "Vérifications", icon: Shield },
         { path: "/admin/users", label: "Utilisateurs", icon: Users },
-        // L'onglet Litiges a été retiré comme demandé
+        { path: "/admin/shifts", label: "Missions", icon: Briefcase },
         { path: "/admin/support", label: "Support", icon: LifeBuoy },
         { path: "/admin/reviews", label: "Avis", icon: Star },
         { path: "/admin/revenue", label: "Revenus", icon: DollarSign },
