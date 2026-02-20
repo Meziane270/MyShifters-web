@@ -10,57 +10,78 @@ import {
     Loader2,
     ArrowRight,
     Lock,
-    FileText
+    FileText,
+    Euro
 } from "lucide-react";
-import { useWorkerData } from "../../../hooks/useWorkerData";
 import { useAuth } from "../../../context/AuthContext";
+import axios from "axios";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
+import ShiftDetailModal from "./components/ShiftDetailModal";
+
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function MissionsPage() {
-    const { user } = useAuth();
-    const { fetchData, postData, loading } = useWorkerData();
+    const { user, getAuthHeader } = useAuth();
     const [allMissions, setAllMissions] = useState([]);
     const [myApplications, setMyApplications] = useState([]);
     const [searchQuery, setSearchQuery] = useState("");
     const [selectedJob, setSelectedJob] = useState("Tous");
-    const [activeTab, setActiveTab] = useState("confirmed");
+    const [activeTab, setActiveTab] = useState("available");
+    const [loading, setLoading] = useState(true);
+    
+    // Pour la modal de détails
+    const [selectedShift, setSelectedShift] = useState(null);
+    const [modalOpen, setModalOpen] = useState(false);
 
-    // Métiers pour le filtre (Disponibles uniquement)
+    // Métiers pour le filtre
     const jobs = ["Tous", "Réception", "Housekeeping", "Maintenance technique", "Restauration & Salle"];
 
     // Vérification du statut du profil
     const isVerified = user?.verification_status === 'verified';
 
     const loadMissions = useCallback(async () => {
+        setLoading(true);
         try {
-            const [shifts, apps] = await Promise.all([
-                fetchData('/shifts'),
-                fetchData('/applications/worker')
+            const [shiftsRes, appsRes] = await Promise.all([
+                axios.get(`${API}/shifts`, { headers: getAuthHeader() }),
+                axios.get(`${API}/applications/worker`, { headers: getAuthHeader() })
             ]);
-            setAllMissions(shifts || []);
-            setMyApplications(apps || []);
+            setAllMissions(shiftsRes.data || []);
+            setMyApplications(appsRes.data || []);
         } catch (err) {
             console.error("Erreur missions:", err);
+            toast.error("Erreur lors du chargement des missions");
+        } finally {
+            setLoading(false);
         }
-    }, [fetchData]);
+    }, [getAuthHeader]);
 
     useEffect(() => {
         loadMissions();
     }, [loadMissions]);
 
-    const handleApply = async (shiftId) => {
-        if (!isVerified) {
-            toast.error("Votre profil doit être vérifié par l'administration avant de pouvoir postuler.");
-            return;
+    const calculateTotalPay = (mission) => {
+        if (!mission) return 0;
+        const rate = mission.hourly_rate || 0;
+        
+        // Calcul de la durée en heures
+        let duration = 0;
+        if (mission.start_time && mission.end_time) {
+            const [startH, startM] = mission.start_time.split(':').map(Number);
+            const [endH, endM] = mission.end_time.split(':').map(Number);
+            
+            let startMinutes = startH * 60 + startM;
+            let endMinutes = endH * 60 + endM;
+            
+            if (endMinutes <= startMinutes) {
+                endMinutes += 24 * 60; // Mission de nuit
+            }
+            duration = (endMinutes - startMinutes) / 60;
         }
-        try {
-            await postData('/applications', { shift_id: shiftId });
-            toast.success("Candidature envoyée !");
-            loadMissions();
-        } catch (err) {
-            toast.error(err.response?.data?.detail || "Erreur lors de la candidature");
-        }
+        
+        const days = Array.isArray(mission.dates) ? mission.dates.length : 1;
+        return (rate * duration * days).toFixed(2);
     };
 
     const availableMissions = useMemo(() => {
@@ -68,16 +89,15 @@ export default function MissionsPage() {
             const matchesSearch = (mission.hotel_name || "").toLowerCase().includes(searchQuery.toLowerCase()) || 
                                  (mission.title || "").toLowerCase().includes(searchQuery.toLowerCase());
             
-            // Logique de filtrage par métier comme demandé
             let matchesJob = selectedJob === "Tous";
             if (!matchesJob) {
-                const title = (mission.title || "").toLowerCase();
+                const serviceType = (mission.service_type || "").toLowerCase();
                 const jobLower = selectedJob.toLowerCase();
-                if (jobLower === "réception") matchesJob = title.includes("réception");
-                else if (jobLower === "housekeeping") matchesJob = title.includes("housekeeping") || title.includes("chambre") || title.includes("valet");
-                else if (jobLower === "restauration & salle") matchesJob = title.includes("restauration") || title.includes("salle") || title.includes("serveur") || title.includes("bar");
-                else if (jobLower === "maintenance technique") matchesJob = title.includes("maintenance") || title.includes("technique");
-                else matchesJob = title.includes(jobLower);
+                
+                if (jobLower === "réception") matchesJob = serviceType === "reception";
+                else if (jobLower === "housekeeping") matchesJob = serviceType === "housekeeping";
+                else if (jobLower === "restauration & salle") matchesJob = serviceType === "restaurant";
+                else if (jobLower === "maintenance technique") matchesJob = serviceType === "maintenance";
             }
 
             const alreadyApplied = myApplications.some(app => app.shift_id === mission.id);
@@ -92,6 +112,11 @@ export default function MissionsPage() {
     const applicationsMissions = useMemo(() => {
         return myApplications.filter(app => app.status === "pending");
     }, [myApplications]);
+
+    const handleOpenDetails = (mission) => {
+        setSelectedShift(mission);
+        setModalOpen(true);
+    };
 
     if (loading && allMissions.length === 0) {
         return (
@@ -111,12 +136,12 @@ export default function MissionsPage() {
                 </div>
             </div>
 
-            {/* Navigation par Onglets - Confirmées - Candidatures - Disponibles */}
+            {/* Navigation par Onglets - Disponibles (à gauche) - Candidatures - Confirmées */}
             <div className="flex flex-wrap items-center gap-2 p-2 bg-white border border-slate-100 rounded-[2rem] shadow-sm">
                 {[
-                    { id: 'confirmed', label: 'Confirmées', icon: CheckCircle2, color: 'text-emerald-500' },
+                    { id: 'available', label: 'Disponibles', icon: Briefcase, color: 'text-brand' },
                     { id: 'applications', label: 'Candidatures', icon: FileText, color: 'text-blue-500' },
-                    { id: 'available', label: 'Disponibles', icon: Briefcase, color: 'text-brand' }
+                    { id: 'confirmed', label: 'Confirmées', icon: CheckCircle2, color: 'text-emerald-500' }
                 ].map((tab) => (
                     <button
                         key={tab.id}
@@ -189,30 +214,14 @@ export default function MissionsPage() {
 
             {/* Liste des missions */}
             <div className="grid gap-6">
-                {activeTab === 'confirmed' && (
-                    confirmedMissions.length > 0 ? (
-                        confirmedMissions.map((app) => (
-                            <MissionItem key={app.id} mission={app} type="confirmed" />
-                        ))
-                    ) : (
-                        <EmptyState icon={CheckCircle2} text="Aucune mission confirmée pour le moment." />
-                    )
-                )}
-
-                {activeTab === 'applications' && (
-                    applicationsMissions.length > 0 ? (
-                        applicationsMissions.map((app) => (
-                            <MissionItem key={app.id} mission={app} type="pending" />
-                        ))
-                    ) : (
-                        <EmptyState icon={FileText} text="Vous n'avez aucune candidature en cours." />
-                    )
-                )}
-
                 {activeTab === 'available' && (
                     availableMissions.length > 0 ? (
                         availableMissions.map((mission) => (
-                            <div key={mission.id} className="group bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-8">
+                            <div 
+                                key={mission.id} 
+                                onClick={() => handleOpenDetails(mission)}
+                                className="group bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm hover:shadow-2xl transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-8 cursor-pointer"
+                            >
                                 <div className="flex items-center gap-8">
                                     <div className="h-20 w-20 rounded-3xl bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-brand/10 group-hover:text-brand transition-all">
                                         <Briefcase className="h-10 w-10" />
@@ -221,23 +230,28 @@ export default function MissionsPage() {
                                         <h4 className="font-black text-slate-900 text-xl leading-tight">{mission.title}</h4>
                                         <p className="text-brand font-bold text-sm mt-1">{mission.hotel_name}</p>
                                         <div className="flex flex-wrap gap-6 mt-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
-                                            <span className="flex items-center gap-2"><Calendar className="h-4 w-4" /> {mission.date}</span>
+                                            <span className="flex items-center gap-2">
+                                                <Calendar className="h-4 w-4" /> 
+                                                {Array.isArray(mission.dates) ? `${mission.dates.length} date(s)` : mission.date || "Date non définie"}
+                                            </span>
                                             <span className="flex items-center gap-2"><Clock className="h-4 w-4" /> {mission.start_time} - {mission.end_time}</span>
-                                            <span className="flex items-center gap-2"><MapPin className="h-4 w-4" /> {mission.city || "Paris"}</span>
+                                            <span className="flex items-center gap-2"><MapPin className="h-4 w-4" /> {mission.hotel_city || "Paris"}</span>
                                         </div>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-8">
+                                <div className="flex flex-col sm:flex-row items-center gap-8">
                                     <div className="text-right">
-                                        <p className="text-3xl font-black text-slate-900">{mission.hourly_rate * 7} €</p>
+                                        <p className="text-3xl font-black text-slate-900">{calculateTotalPay(mission)} €</p>
                                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total estimé</p>
                                     </div>
                                     <button 
-                                        onClick={() => handleApply(mission.id)}
-                                        disabled={!isVerified}
-                                        className="px-8 py-5 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-brand transition-all shadow-xl shadow-slate-200 disabled:opacity-30 flex items-center gap-3"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleOpenDetails(mission);
+                                        }}
+                                        className="px-8 py-5 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-brand transition-all shadow-xl shadow-slate-200 flex items-center gap-3"
                                     >
-                                        Postuler <ArrowRight className="h-4 w-4" />
+                                        Détails <ArrowRight className="h-4 w-4" />
                                     </button>
                                 </div>
                             </div>
@@ -246,12 +260,43 @@ export default function MissionsPage() {
                         <EmptyState icon={Search} text="Aucune mission disponible avec ces critères." />
                     )
                 )}
+
+                {activeTab === 'applications' && (
+                    applicationsMissions.length > 0 ? (
+                        applicationsMissions.map((app) => (
+                            <MissionItem key={app.id} mission={app} type="pending" onClick={() => handleOpenDetails(app.shift_details)} />
+                        ))
+                    ) : (
+                        <EmptyState icon={FileText} text="Vous n'avez aucune candidature en cours." />
+                    )
+                )}
+
+                {activeTab === 'confirmed' && (
+                    confirmedMissions.length > 0 ? (
+                        confirmedMissions.map((app) => (
+                            <MissionItem key={app.id} mission={app} type="confirmed" onClick={() => handleOpenDetails(app.shift_details)} />
+                        ))
+                    ) : (
+                        <EmptyState icon={CheckCircle2} text="Aucune mission confirmée pour le moment." />
+                    )
+                )}
             </div>
+
+            {/* Modal de détails */}
+            <ShiftDetailModal 
+                shift={selectedShift}
+                isOpen={modalOpen}
+                onClose={() => setModalOpen(false)}
+                onSuccess={() => {
+                    setModalOpen(false);
+                    loadMissions();
+                }}
+            />
         </div>
     );
 }
 
-function MissionItem({ mission, type }) {
+function MissionItem({ mission, type, onClick }) {
     const statusConfig = {
         accepted: { label: "Confirmée", color: "bg-emerald-100 text-emerald-700" },
         pending: { label: "En attente", color: "bg-blue-100 text-blue-700" }
@@ -260,7 +305,10 @@ function MissionItem({ mission, type }) {
     const config = statusConfig[mission.status] || statusConfig.pending;
 
     return (
-        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div 
+            onClick={onClick}
+            className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6 cursor-pointer hover:shadow-md transition-all"
+        >
             <div className="flex items-center gap-6">
                 <div className={`h-16 w-16 rounded-2xl flex items-center justify-center ${type === 'confirmed' ? 'bg-emerald-50 text-emerald-500' : 'bg-blue-50 text-blue-500'}`}>
                     <Briefcase className="h-8 w-8" />
@@ -278,9 +326,9 @@ function MissionItem({ mission, type }) {
                 <span className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest ${config.color}`}>
                     {config.label}
                 </span>
-                <Link to={`/worker/missions/${mission.shift_id}`} className="h-14 w-14 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 hover:bg-brand hover:text-white transition-all">
+                <div className="h-14 w-14 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 hover:bg-brand hover:text-white transition-all">
                     <ArrowRight className="h-6 w-6" />
-                </Link>
+                </div>
             </div>
         </div>
     );

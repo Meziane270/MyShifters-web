@@ -1,5 +1,5 @@
 // src/pages/worker/shifts/components/ShiftDetailModal.jsx
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import axios from "axios";
 import { useAuth } from "../../../../context/AuthContext";
 import { toast } from "sonner";
@@ -8,11 +8,9 @@ import {
     DialogContent,
     DialogHeader,
     DialogTitle,
-    DialogFooter,
 } from "../../../../components/ui/dialog";
 import { Button } from "../../../../components/ui/button";
 import { Textarea } from "../../../../components/ui/textarea";
-import { Badge } from "../../../../components/ui/badge";
 import {
     Building2,
     MapPin,
@@ -21,21 +19,26 @@ import {
     Euro,
     Briefcase,
     Send,
-    X,
-    Info
+    Info,
+    Loader2
 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function ShiftDetailModal({ shift, application, isOpen, onClose, onSuccess }) {
-    const { getAuthHeader } = useAuth();
+    const { getAuthHeader, user } = useAuth();
     const [message, setMessage] = useState("");
     const [loading, setLoading] = useState(false);
 
     const isApplication = !!application;
+    const isVerified = user?.verification_status === 'verified';
 
     const handleSubmit = useCallback(async () => {
         if (!shift?.id) return;
+        if (!isVerified) {
+            toast.error("Votre profil doit être vérifié pour postuler.");
+            return;
+        }
         setLoading(true);
         try {
             await axios.post(
@@ -46,28 +49,55 @@ export default function ShiftDetailModal({ shift, application, isOpen, onClose, 
                 },
                 { headers: getAuthHeader() }
             );
+            toast.success("Candidature envoyée avec succès !");
             onSuccess?.();
             onClose?.();
             setMessage("");
-            toast.success("Candidature envoyée avec succès !");
         } catch (e) {
             toast.error(e?.response?.data?.detail || "Erreur lors de la candidature");
         } finally {
             setLoading(false);
         }
-    }, [shift, message, getAuthHeader, onSuccess, onClose]);
+    }, [shift, message, getAuthHeader, onSuccess, onClose, isVerified]);
+
+    const calculateTotalPay = useMemo(() => {
+        if (!shift) return "0.00";
+        const rate = shift.hourly_rate || 0;
+        
+        let duration = 0;
+        if (shift.start_time && shift.end_time) {
+            const [startH, startM] = shift.start_time.split(':').map(Number);
+            const [endH, endM] = shift.end_time.split(':').map(Number);
+            
+            let startMinutes = startH * 60 + startM;
+            let endMinutes = endH * 60 + endM;
+            
+            if (endMinutes <= startMinutes) {
+                endMinutes += 24 * 60; // Mission de nuit
+            }
+            duration = (endMinutes - startMinutes) / 60;
+        }
+        
+        const days = Array.isArray(shift.dates) ? shift.dates.length : 1;
+        return (rate * duration * days).toFixed(2);
+    }, [shift]);
 
     if (!shift) return null;
 
     const formatDate = (dateString) => {
-        if (!dateString) return "";
-        const date = new Date(dateString);
-        return date.toLocaleDateString("fr-FR", {
-            weekday: 'long',
-            day: "numeric",
-            month: "long",
-            year: "numeric",
-        });
+        if (!dateString) return "Date non définie";
+        try {
+            const date = new Date(dateString);
+            if (isNaN(date.getTime())) return dateString;
+            return date.toLocaleDateString("fr-FR", {
+                weekday: 'long',
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+            });
+        } catch {
+            return dateString;
+        }
     };
 
     const getServiceLabel = (type) => {
@@ -96,13 +126,19 @@ export default function ShiftDetailModal({ shift, application, isOpen, onClose, 
                 </div>
 
                 <div className="p-10 space-y-8 max-h-[60vh] overflow-y-auto">
-                    <div className="grid grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                             <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-                                <Calendar className="w-3 h-3" /> Date
+                                <Calendar className="w-3 h-3" /> Dates
                             </div>
-                            <div className="font-bold text-slate-900">
-                                {shift.dates?.length > 0 ? formatDate(shift.dates[0]) : formatDate(shift.date)}
+                            <div className="font-bold text-slate-900 text-sm">
+                                {Array.isArray(shift.dates) ? (
+                                    <div className="space-y-1">
+                                        {shift.dates.map((d, i) => <div key={i}>{formatDate(d)}</div>)}
+                                    </div>
+                                ) : (
+                                    formatDate(shift.date)
+                                )}
                             </div>
                         </div>
 
@@ -116,7 +152,7 @@ export default function ShiftDetailModal({ shift, application, isOpen, onClose, 
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                             <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2">
                                 <Briefcase className="w-3 h-3" /> Service
@@ -130,21 +166,25 @@ export default function ShiftDetailModal({ shift, application, isOpen, onClose, 
                             <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2">
                                 <Euro className="w-3 h-3" /> Rémunération
                             </div>
-                            <div className="flex items-baseline gap-1">
-                                <span className="text-xl font-black text-slate-900">{shift.hourly_rate}€</span>
-                                <span className="text-xs text-slate-400">/heure</span>
+                            <div className="flex flex-col">
+                                <div className="flex items-baseline gap-1">
+                                    <span className="text-xl font-black text-slate-900">{shift.hourly_rate}€</span>
+                                    <span className="text-xs text-slate-400">/heure</span>
+                                </div>
+                                <div className="mt-1">
+                                    <span className="text-brand font-black text-lg">{calculateTotalPay}€</span>
+                                    <span className="text-[10px] text-slate-400 ml-1 uppercase font-bold">Total estimé</span>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    {shift.hotel_city && (
-                        <div className="space-y-2">
-                            <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                                <MapPin className="w-3 h-3" /> Localisation
-                            </div>
-                            <p className="font-bold text-slate-900">{shift.hotel_address || shift.hotel_city}</p>
+                    <div className="space-y-2">
+                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                            <MapPin className="w-3 h-3" /> Localisation
                         </div>
-                    )}
+                        <p className="font-bold text-slate-900">{shift.hotel_city || "Paris"}</p>
+                    </div>
 
                     {shift.description && (
                         <div className="space-y-2">
@@ -179,8 +219,8 @@ export default function ShiftDetailModal({ shift, application, isOpen, onClose, 
                     {!isApplication && (
                         <Button
                             onClick={handleSubmit}
-                            disabled={loading}
-                            className="bg-brand hover:bg-brand-light text-white rounded-xl px-8 py-6 font-bold shadow-lg shadow-brand/20"
+                            disabled={loading || !isVerified}
+                            className="bg-brand hover:bg-brand/90 text-white rounded-xl px-8 py-6 font-bold shadow-lg shadow-brand/20 disabled:opacity-50"
                         >
                             {loading ? (
                                 <Loader2 className="w-4 h-4 animate-spin mr-2" />
