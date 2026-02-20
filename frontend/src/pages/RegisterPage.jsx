@@ -283,6 +283,16 @@ export default function RegisterPage() {
     setWorkerStep(1);
   }, []);
 
+  const handleSkillToggle = useCallback((skillId) => {
+    setFormData((prev) => {
+      const skills = prev.skills || [];
+      const newSkills = skills.includes(skillId)
+        ? skills.filter((s) => s !== skillId)
+        : [...skills, skillId];
+      return { ...prev, skills: newSkills };
+    });
+  }, []);
+
   // ========== SOUMISSION ==========
   const handleSubmit = useCallback(
       async (e) => {
@@ -320,6 +330,7 @@ export default function RegisterPage() {
             fd.append("date_of_birth", formData.date_of_birth || "");
             fd.append("city", formData.city || "");
             fd.append("postal_code", formData.postal_code || "");
+            fd.append("skills", JSON.stringify(formData.skills || []));
             fd.append("experience_years", String(formData.experience_years ?? 0));
 
             fd.append("has_ae_status", String(formData.has_ae_status || false));
@@ -537,6 +548,13 @@ export default function RegisterPage() {
                           workerPrevLabel={workerPrevLabel}
                           onSubmit={handleSubmit}
                           onBack={handleBackToRoleSelection}
+                          handleSkillToggle={handleSkillToggle}
+                          SERVICE_TYPES={[
+                              { id: 'reception', label: 'Réception', icon: '🛎️' },
+                              { id: 'housekeeping', label: 'Housekeeping', icon: '🧹' },
+                              { id: 'maintenance', label: 'Maintenance', icon: '🛠️' },
+                              { id: 'restaurant', label: 'Restauration', icon: '🍽️' }
+                          ]}
                       />
                   )}
                 </div>

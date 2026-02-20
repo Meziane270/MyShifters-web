@@ -194,25 +194,7 @@ async def register(userData: Dict[Any, Any]):
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
     return {"token": token, "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"})}
 
-@api_router.get("/auth/setup-admin-secure-2026")
-async def setup_admin():
-    if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
-    email = "oulmasmeziane@outlook.com"
-    password = "AdminPassword2026!"
-    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        await db.users.update_one({"email": email}, {"$set": {"role": "admin", "password_hash": password_hash, "verification_status": "verified"}})
-        return {"status": "Admin updated successfully"}
-
-    new_admin = {
-        "id": str(uuid.uuid4()), "email": email, "password_hash": password_hash,
-        "role": "admin", "first_name": "Meziane", "last_name": "Oulmas",
-        "verification_status": "verified", "created_at": DateUtils.to_iso(DateUtils.now())
-    }
-    await db.users.insert_one(new_admin)
-    return {"status": "Admin created successfully"}
+# Route admin supprimée pour des raisons de sécurité.
 
 @api_router.post("/auth/register/worker")
 async def register_worker(
@@ -221,6 +203,7 @@ async def register_worker(
         address: str = Form(None), city: str = Form(None), postal_code: str = Form(None),
         experience_years: str = Form("0"), has_ae_status: str = Form("false"), siret: str = Form(None),
         billing_address: str = Form(None), billing_city: str = Form(None), billing_postal_code: str = Form(None),
+        skills: str = Form("[]"),
         cv_pdf: UploadFile = File(None)
 ):
     if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
@@ -233,12 +216,19 @@ async def register_worker(
             upload_result = cloudinary.uploader.upload(cv_pdf.file)
             cv_url = upload_result.get("secure_url")
         except Exception as e: logger.error(f"Failed to upload CV: {e}")
+    
+    try:
+        skills_list = json.loads(skills)
+    except:
+        skills_list = []
+
     new_user = {
         "id": str(uuid.uuid4()), "email": email, "password_hash": password_hash, "role": role,
         "first_name": first_name, "last_name": last_name, "phone": phone, "address": address,
         "city": city, "postal_code": postal_code, "experience_years": int(experience_years) if experience_years else 0,
         "has_ae_status": has_ae_status.lower() == "true", "siret": siret, "billing_address": billing_address,
         "billing_city": billing_city, "billing_postal_code": billing_postal_code, "cv_url": cv_url,
+        "skills": skills_list,
         "verification_status": "pending", "created_at": DateUtils.to_iso(DateUtils.now())
     }
     new_user = {k: v for k, v in new_user.items() if v is not None}
