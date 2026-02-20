@@ -181,7 +181,7 @@ async def register(userData: Dict[Any, Any]):
         "role": userData.get("role", "worker"), "first_name": userData.get("first_name"),
         "last_name": userData.get("last_name"), "hotel_name": userData.get("hotel_name"),
         "city": userData.get("city"), "postal_code": userData.get("postal_code"),
-        "phone": userData.get("phone"), "verification_status": "unverified",
+        "phone": userData.get("phone"), "verification_status": "pending",
         "created_at": DateUtils.to_iso(DateUtils.now())
     }
     for k, v in userData.items():
@@ -197,12 +197,12 @@ async def setup_admin():
     email = "oulmasmeziane@outlook.com"
     password = "AdminPassword2026!"
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    
+
     existing = await db.users.find_one({"email": email})
     if existing:
         await db.users.update_one({"email": email}, {"$set": {"role": "admin", "password_hash": password_hash, "verification_status": "verified"}})
         return {"status": "Admin updated successfully"}
-    
+
     new_admin = {
         "id": str(uuid.uuid4()), "email": email, "password_hash": password_hash,
         "role": "admin", "first_name": "Meziane", "last_name": "Oulmas",
@@ -213,12 +213,12 @@ async def setup_admin():
 
 @api_router.post("/auth/register/worker")
 async def register_worker(
-    email: str = Form(...), password: str = Form(...), first_name: str = Form(None),
-    last_name: str = Form(None), role: str = Form("worker"), phone: str = Form(None),
-    address: str = Form(None), city: str = Form(None), postal_code: str = Form(None),
-    experience_years: str = Form("0"), has_ae_status: str = Form("false"), siret: str = Form(None),
-    billing_address: str = Form(None), billing_city: str = Form(None), billing_postal_code: str = Form(None),
-    cv_pdf: UploadFile = File(None)
+        email: str = Form(...), password: str = Form(...), first_name: str = Form(None),
+        last_name: str = Form(None), role: str = Form("worker"), phone: str = Form(None),
+        address: str = Form(None), city: str = Form(None), postal_code: str = Form(None),
+        experience_years: str = Form("0"), has_ae_status: str = Form("false"), siret: str = Form(None),
+        billing_address: str = Form(None), billing_city: str = Form(None), billing_postal_code: str = Form(None),
+        cv_pdf: UploadFile = File(None)
 ):
     if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
     existing = await db.users.find_one({"email": email})
@@ -236,7 +236,7 @@ async def register_worker(
         "city": city, "postal_code": postal_code, "experience_years": int(experience_years) if experience_years else 0,
         "has_ae_status": has_ae_status.lower() == "true", "siret": siret, "billing_address": billing_address,
         "billing_city": billing_city, "billing_postal_code": billing_postal_code, "cv_url": cv_url,
-        "verification_status": "unverified", "created_at": DateUtils.to_iso(DateUtils.now())
+        "verification_status": "pending", "created_at": DateUtils.to_iso(DateUtils.now())
     }
     new_user = {k: v for k, v in new_user.items() if v is not None}
     await db.users.insert_one(new_user)
@@ -259,7 +259,7 @@ async def login(credentials: UserLogin):
         logger.warning(f"Bcrypt check failed for {credentials.email}, checking plain text: {e}")
         if credentials.password == stored_hash:
             is_valid = True
-            
+
     if not is_valid:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_access_token({"user_id": user["id"], "role": user["role"]})
@@ -378,7 +378,10 @@ async def admin_stats(current_user: dict = Depends(require_admin)):
     return {
         "total_workers": await db.users.count_documents({"role": "worker"}),
         "total_hotels": await db.users.count_documents({"role": "hotel"}),
-        "total_shifts": await db.shifts.count_documents({}), "revenue": 0
+        "pending_workers": await db.users.count_documents({"role": "worker", "verification_status": "pending"}),
+        "pending_hotels": await db.users.count_documents({"role": "hotel", "verification_status": "pending"}),
+        "total_shifts": await db.shifts.count_documents({}),
+        "revenue": 0
     }
 
 @api_router.get("/admin/users")
@@ -391,6 +394,42 @@ async def pending_verifs(current_user: dict = Depends(require_admin)):
     workers = await db.users.find({"role": "worker", "verification_status": "pending"}).to_list(100)
     hotels = await db.users.find({"role": "hotel", "verification_status": "pending"}).to_list(100)
     return {"workers": [clean_mongo_doc(w) for w in workers], "hotels": [clean_mongo_doc(h) for h in hotels]}
+
+@api_router.post("/admin/users/{user_id}/verify")
+async def verify_user(user_id: str, payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    """
+    Vérifier ou rejeter un utilisateur en attente.
+
+    Payload:
+    {
+        "status": "verified" | "rejected",
+        "reason": "Motif du rejet (optionnel, requis si status=rejected)"
+    }
+    """
+    status = payload.get("status")
+    reason = payload.get("reason", "")
+
+    if status not in ["verified", "rejected"]:
+        raise HTTPException(status_code=400, detail="Status must be 'verified' or 'rejected'")
+
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Mettre à jour le statut
+    update_data = {"verification_status": status}
+    if status == "rejected" and reason:
+        update_data["rejection_reason"] = reason
+
+    await db.users.update_one({"id": user_id}, {"$set": update_data})
+
+    # TODO: Envoyer un email à l'utilisateur
+    # if status == "verified":
+    #     send_verification_approved_email(user["email"], user.get("hotel_name") or user.get("first_name"))
+    # else:
+    #     send_verification_rejected_email(user["email"], reason)
+
+    return {"status": "success", "message": f"User {status}"}
 
 @api_router.get("/admin/support/threads")
 async def admin_threads(current_user: dict = Depends(require_admin)):
