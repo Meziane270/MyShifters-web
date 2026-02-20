@@ -95,12 +95,14 @@ class DateUtils:
         return dt.isoformat() if not isinstance(dt, str) else dt
 
 def clean_mongo_doc(doc: dict) -> dict:
-    if not doc: return doc
+    if not doc:
+        return doc
+    doc = doc.copy()
     if "_id" in doc:
-        doc["id"] = str(doc["_id"])
+        if "id" not in doc:
+            doc["id"] = str(doc["_id"])
         del doc["_id"]
     return doc
-
 # -----------------------------
 # Enums & Models
 # -----------------------------
@@ -375,15 +377,17 @@ async def create_support_thread(payload: Dict[Any, Any], current_user: dict = De
 # Admin
 @api_router.get("/admin/stats")
 async def admin_stats(current_user: dict = Depends(require_admin)):
+    pending_workers = await db.users.count_documents({"role": "worker", "verification_status": "pending"})
+    pending_hotels = await db.users.count_documents({"role": "hotel", "verification_status": "unverified"})
     return {
         "total_workers": await db.users.count_documents({"role": "worker"}),
         "total_hotels": await db.users.count_documents({"role": "hotel"}),
-        "pending_workers": await db.users.count_documents({"role": "worker", "verification_status": "pending"}),
-        "pending_hotels": await db.users.count_documents({"role": "hotel", "verification_status": "pending"}),
+        "pending_workers": pending_workers,
+        "pending_hotels": pending_hotels,
+        "pending_verifications": pending_workers + pending_hotels,  # Nouveau champ
         "total_shifts": await db.shifts.count_documents({}),
         "revenue": 0
     }
-
 @api_router.get("/admin/users")
 async def admin_users(current_user: dict = Depends(require_admin)):
     users = await db.users.find({}, {"password_hash": 0}).to_list(100)
@@ -422,12 +426,6 @@ async def verify_user(user_id: str, payload: Dict[Any, Any], current_user: dict 
         update_data["rejection_reason"] = reason
 
     await db.users.update_one({"id": user_id}, {"$set": update_data})
-
-    # TODO: Envoyer un email à l'utilisateur
-    # if status == "verified":
-    #     send_verification_approved_email(user["email"], user.get("hotel_name") or user.get("first_name"))
-    # else:
-    #     send_verification_rejected_email(user["email"], reason)
 
     return {"status": "success", "message": f"User {status}"}
 
