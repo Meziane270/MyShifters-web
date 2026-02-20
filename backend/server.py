@@ -21,12 +21,11 @@ import string
 import re
 import cloudinary
 import cloudinary.uploader
-from bson import ObjectId # Import ObjectId
+from bson import ObjectId
 
 # -----------------------------
 # Setup / Env
 # -----------------------------
-# Charger .env s'il existe (utile pour le local), sinon utiliser les variables système (Render)
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -42,7 +41,7 @@ MONGO_URL = get_env("MONGO_URL", default="mongodb://localhost:27017/myshifters")
 DB_NAME = get_env("DB_NAME", default="myshifters")
 JWT_SECRET = get_env("JWT_SECRET", default="myshifters-secret-key-2024")
 
-# Cloudinary - Utilisation des identifiants fournis
+# Cloudinary
 CLOUDINARY_CLOUD_NAME = "drltfrn45"
 CLOUDINARY_API_KEY = "691178755413624"
 CLOUDINARY_API_SECRET = "dPbUZ_PcSH0GPH7qaUsfs-2bjaE"
@@ -66,11 +65,8 @@ def parse_cors(origins_raw: str) -> List[str]:
         return ["*"]
     return [o.strip().rstrip("/") for o in origins_raw.split(",") if o.strip()]
 
-# On récupère la variable ou on met une valeur par défaut de secours
 CORS_ORIGINS_RAW = os.environ.get("CORS_ORIGINS", "https://myshifters-web.netlify.app")
 allowed_origins = parse_cors(CORS_ORIGINS_RAW)
-
-logger.info(f"CORS initialisé avec les origines : {allowed_origins}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -99,9 +95,7 @@ class DateUtils:
         return dt.isoformat() if not isinstance(dt, str) else dt
 
 def clean_mongo_doc(doc: dict) -> dict:
-    """Convertit l'ObjectId de MongoDB en string et renomme _id en id."""
-    if not doc:
-        return doc
+    if not doc: return doc
     if "_id" in doc:
         doc["id"] = str(doc["_id"])
         del doc["_id"]
@@ -126,16 +120,6 @@ class ApplicationStatus(str, Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     COMPLETED = "completed"
-
-class UserBase(BaseModel):
-    email: EmailStr
-    role: UserRole
-    hotel_name: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    verification_status: str = "unverified"
-    city: Optional[str] = None
-    avatar_url: Optional[str] = None
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -185,62 +169,56 @@ async def require_admin(current_user: dict = Depends(get_current_user)):
 @api_router.post("/auth/register")
 async def register(userData: Dict[Any, Any]):
     if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
-
     email = userData.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required")
-
+    if not email: raise HTTPException(status_code=400, detail="Email is required")
     existing = await db.users.find_one({"email": email})
     if existing: raise HTTPException(status_code=400, detail="Email already registered")
-
     password = userData.get("password")
     if not password: raise HTTPException(status_code=400, detail="Password is required")
-
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-    # Flatten userData if needed and remove sensitive fields
     new_user = {
-        "id": str(uuid.uuid4()),
-        "email": email,
-        "password_hash": password_hash,
-        "role": userData.get("role", "worker"),
-        "first_name": userData.get("first_name"),
-        "last_name": userData.get("last_name"),
-        "hotel_name": userData.get("hotel_name"),
-        "city": userData.get("city"),
-        "postal_code": userData.get("postal_code"),
-        "phone": userData.get("phone"),
-        "verification_status": "unverified",
+        "id": str(uuid.uuid4()), "email": email, "password_hash": password_hash,
+        "role": userData.get("role", "worker"), "first_name": userData.get("first_name"),
+        "last_name": userData.get("last_name"), "hotel_name": userData.get("hotel_name"),
+        "city": userData.get("city"), "postal_code": userData.get("postal_code"),
+        "phone": userData.get("phone"), "verification_status": "unverified",
         "created_at": DateUtils.to_iso(DateUtils.now())
     }
-
-    # Add any other fields from userData except already handled ones
     for k, v in userData.items():
         if k not in ["password", "confirmPassword", "email", "role", "first_name", "last_name", "hotel_name", "city", "postal_code", "phone"]:
             new_user[k] = v
-
     await db.users.insert_one(new_user)
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
     return {"token": token, "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"})}
 
+@api_router.get("/auth/setup-admin-secure-2026")
+async def setup_admin():
+    if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
+    email = "oulmasmeziane@outlook.com"
+    password = "AdminPassword2026!"
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        await db.users.update_one({"email": email}, {"$set": {"role": "admin", "password_hash": password_hash, "verification_status": "verified"}})
+        return {"status": "Admin updated successfully"}
+    
+    new_admin = {
+        "id": str(uuid.uuid4()), "email": email, "password_hash": password_hash,
+        "role": "admin", "first_name": "Meziane", "last_name": "Oulmas",
+        "verification_status": "verified", "created_at": DateUtils.to_iso(DateUtils.now())
+    }
+    await db.users.insert_one(new_admin)
+    return {"status": "Admin created successfully"}
+
 @api_router.post("/auth/register/worker")
 async def register_worker(
-        email: str = Form(...),
-        password: str = Form(...),
-        first_name: str = Form(None),
-        last_name: str = Form(None),
-        role: str = Form("worker"),
-        phone: str = Form(None),
-        address: str = Form(None),
-        city: str = Form(None),
-        postal_code: str = Form(None),
-        experience_years: str = Form("0"),
-        has_ae_status: str = Form("false"),
-        siret: str = Form(None),
-        billing_address: str = Form(None),
-        billing_city: str = Form(None),
-        billing_postal_code: str = Form(None),
-        cv_pdf: UploadFile = File(None)
+    email: str = Form(...), password: str = Form(...), first_name: str = Form(None),
+    last_name: str = Form(None), role: str = Form("worker"), phone: str = Form(None),
+    address: str = Form(None), city: str = Form(None), postal_code: str = Form(None),
+    experience_years: str = Form("0"), has_ae_status: str = Form("false"), siret: str = Form(None),
+    billing_address: str = Form(None), billing_city: str = Form(None), billing_postal_code: str = Form(None),
+    cv_pdf: UploadFile = File(None)
 ):
     if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
     existing = await db.users.find_one({"email": email})
@@ -251,33 +229,16 @@ async def register_worker(
         try:
             upload_result = cloudinary.uploader.upload(cv_pdf.file)
             cv_url = upload_result.get("secure_url")
-        except Exception as e:
-            logger.error(f"Failed to upload CV: {e}")
+        except Exception as e: logger.error(f"Failed to upload CV: {e}")
     new_user = {
-        "id": str(uuid.uuid4()),
-        "email": email,
-        "password_hash": password_hash,
-        "role": role,
-        "first_name": first_name,
-        "last_name": last_name,
-        "phone": phone,
-        "address": address,
-        "city": city,
-        "postal_code": postal_code,
-        "experience_years": int(experience_years) if experience_years else 0,
-        "has_ae_status": has_ae_status.lower() == "true",
-        "siret": siret,
-        "billing_address": billing_address,
-        "billing_city": billing_city,
-        "billing_postal_code": billing_postal_code,
-        "cv_url": cv_url,
-        "verification_status": "unverified",
-        "created_at": DateUtils.to_iso(DateUtils.now())
+        "id": str(uuid.uuid4()), "email": email, "password_hash": password_hash, "role": role,
+        "first_name": first_name, "last_name": last_name, "phone": phone, "address": address,
+        "city": city, "postal_code": postal_code, "experience_years": int(experience_years) if experience_years else 0,
+        "has_ae_status": has_ae_status.lower() == "true", "siret": siret, "billing_address": billing_address,
+        "billing_city": billing_city, "billing_postal_code": billing_postal_code, "cv_url": cv_url,
+        "verification_status": "unverified", "created_at": DateUtils.to_iso(DateUtils.now())
     }
-
-    # Clean up None values
     new_user = {k: v for k, v in new_user.items() if v is not None}
-
     await db.users.insert_one(new_user)
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
     return {"token": token, "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"})}
@@ -285,47 +246,30 @@ async def register_worker(
 @api_router.post("/auth/login")
 async def login(credentials: UserLogin):
     if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
+    user = await db.users.find_one({"email": credentials.email})
+    if not user: raise HTTPException(status_code=401, detail="Invalid email or password")
+    stored_hash = user.get("password_hash")
+    if not stored_hash: raise HTTPException(status_code=401, detail="Invalid email or password")
+    # Vérification robuste avec bcrypt et fallback texte brut
+    is_valid = False
     try:
-        user = await db.users.find_one({"email": credentials.email})
-        if not user:
-            logger.warning(f"Login failed: User {credentials.email} not found")
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-
-        stored_hash = user.get("password_hash")
-        if not stored_hash:
-            logger.error(f"Login failed: User {credentials.email} has no password_hash")
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-
-        # Check if the stored hash is valid for bcrypt
-        is_valid = False
-        try:
-            # bcrypt.checkpw requires bytes
-            if bcrypt.checkpw(credentials.password.encode("utf-8"), stored_hash.encode("utf-8")):
-                is_valid = True
-        except ValueError as ve:
-            # This happens if the salt is invalid (e.g. plain text password in DB)
-            logger.warning(f"Bcrypt error for user {credentials.email}: {ve}")
-            # Fallback check if you want to allow plain text (not recommended for production but helps during migration)
-            if credentials.password == stored_hash:
-                is_valid = True
-                logger.info(f"User {credentials.email} logged in with plain-text password. Please update to hash.")
-
-        if not is_valid:
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-
-        token = create_access_token({"user_id": user["id"], "role": user["role"]})
-        return {"token": token, "user": clean_mongo_doc({k: v for k, v in user.items() if k != "password_hash"})}
-    except HTTPException:
-        raise
+        if bcrypt.checkpw(credentials.password.encode("utf-8"), stored_hash.encode("utf-8")):
+            is_valid = True
     except Exception as e:
-        logger.error(f"Login error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.warning(f"Bcrypt check failed for {credentials.email}, checking plain text: {e}")
+        if credentials.password == stored_hash:
+            is_valid = True
+            
+    if not is_valid:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = create_access_token({"user_id": user["id"], "role": user["role"]})
+    return {"token": token, "user": clean_mongo_doc({k: v for k, v in user.items() if k != "password_hash"})}
 
 @api_router.get("/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
     return clean_mongo_doc({k: v for k, v in current_user.items() if k != "password_hash"})
 
-# Shifts & Applications
+# Shifts
 @api_router.post("/shifts")
 async def create_shift(payload: ShiftCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != UserRole.HOTEL: raise HTTPException(status_code=403)
@@ -343,6 +287,12 @@ async def get_hotel_shifts(current_user: dict = Depends(get_current_user)):
     shifts = await db.shifts.find({"hotel_id": current_user["id"]}).to_list(100)
     return [clean_mongo_doc(s) for s in shifts]
 
+@api_router.delete("/shifts/{shift_id}")
+async def delete_shift(shift_id: str, current_user: dict = Depends(get_current_user)):
+    await db.shifts.delete_one({"id": shift_id, "hotel_id": current_user["id"]})
+    return {"status": "success"}
+
+# Applications
 @api_router.post("/applications")
 async def apply_to_shift(shift_id: str, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != UserRole.WORKER: raise HTTPException(status_code=403)
@@ -356,6 +306,25 @@ async def get_hotel_apps(current_user: dict = Depends(get_current_user)):
     apps = await db.applications.find({"shift_id": {"$in": [s["id"] for s in shifts]}}).to_list(100)
     return [clean_mongo_doc(a) for a in apps]
 
+@api_router.put("/applications/{app_id}")
+async def update_app(app_id: str, payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    await db.applications.update_one({"id": app_id}, {"$set": payload})
+    return {"status": "success"}
+
+# Stats
+@api_router.get("/stats/hotel")
+async def get_hotel_stats(current_user: dict = Depends(get_current_user)):
+    count = await db.shifts.count_documents({"hotel_id": current_user["id"]})
+    return {"total_shifts": count}
+
+# Invoices
+@api_router.get("/invoices/hotel")
+@api_router.get("/invoices/worker")
+async def get_invoices(current_user: dict = Depends(get_current_user)):
+    key = "hotel_id" if current_user["role"] == UserRole.HOTEL else "worker_id"
+    invs = await db.invoices.find({key: current_user["id"]}).to_list(100)
+    return [clean_mongo_doc(i) for i in invs]
+
 # Profile & Avatar
 @api_router.post("/worker/avatar")
 @api_router.post("/hotel/avatar")
@@ -365,29 +334,62 @@ async def upload_avatar(file: UploadFile = File(...), current_user: dict = Depen
     await db.users.update_one({"id": current_user["id"]}, {"$set": {"avatar_url": url}})
     return {"avatar_url": url}
 
-# Invoices
-@api_router.get("/hotel/invoices")
-@api_router.get("/worker/invoices")
-async def get_invoices(current_user: dict = Depends(get_current_user)):
-    key = "hotel_id" if current_user["role"] == UserRole.HOTEL else "worker_id"
-    invs = await db.invoices.find({key: current_user["id"]}).to_list(100)
-    return [clean_mongo_doc(i) for i in invs]
+@api_router.put("/hotels/me")
+async def update_hotel_profile(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != UserRole.HOTEL: raise HTTPException(status_code=403)
+    await db.users.update_one({"id": current_user["id"]}, {"$set": payload})
+    return {"status": "success"}
+
+@api_router.get("/hotels/settings")
+async def get_hotel_settings(current_user: dict = Depends(get_current_user)):
+    settings = await db.hotel_settings.find_one({"hotel_id": current_user["id"]})
+    if not settings: return {"vat_number": "", "notifications_email": True, "notifications_sms": False}
+    return clean_mongo_doc(settings)
+
+@api_router.put("/hotels/settings")
+async def update_hotel_settings(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    await db.hotel_settings.update_one({"hotel_id": current_user["id"]}, {"$set": payload}, upsert=True)
+    return {"status": "success"}
 
 # Support
 @api_router.get("/support/threads")
+@api_router.get("/support/threads/me")
 async def get_threads(current_user: dict = Depends(get_current_user)):
-    threads = await db.support_threads.find({"user_id": current_user["id"]}).to_list(100)
+    threads = await db.support_threads.find({"user_id": current_user["id"]}).sort("created_at", -1).to_list(100)
     return [clean_mongo_doc(t) for t in threads]
+
+@api_router.post("/support/threads")
+async def create_support_thread(payload: Dict[Any, Any], current_user: dict = Depends(get_current_user)):
+    thread = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user["id"],
+        "user_email": current_user["email"],
+        "subject": payload.get("subject"),
+        "message": payload.get("message"),
+        "status": "open",
+        "created_at": DateUtils.to_iso(DateUtils.now())
+    }
+    await db.support_threads.insert_one(thread)
+    return clean_mongo_doc(thread)
 
 # Admin
 @api_router.get("/admin/stats")
 async def admin_stats(current_user: dict = Depends(require_admin)):
-    return {"total_workers": await db.users.count_documents({"role": "worker"}), "total_hotels": await db.users.count_documents({"role": "hotel"}), "total_shifts": await db.shifts.count_documents({}), "revenue": 0}
+    return {
+        "total_workers": await db.users.count_documents({"role": "worker"}),
+        "total_hotels": await db.users.count_documents({"role": "hotel"}),
+        "total_shifts": await db.shifts.count_documents({}), "revenue": 0
+    }
+
+@api_router.get("/admin/users")
+async def admin_users(current_user: dict = Depends(require_admin)):
+    users = await db.users.find({}, {"password_hash": 0}).to_list(100)
+    return [clean_mongo_doc(u) for u in users]
 
 @api_router.get("/admin/verifications/pending")
 async def pending_verifs(current_user: dict = Depends(require_admin)):
-    workers = await db.users.find({"role": "worker", "verification_status": "pending"}, {"_id":0}).to_list(100)
-    hotels = await db.users.find({"role": "hotel", "verification_status": "pending"}, {"_id":0}).to_list(100)
+    workers = await db.users.find({"role": "worker", "verification_status": "pending"}).to_list(100)
+    hotels = await db.users.find({"role": "hotel", "verification_status": "pending"}).to_list(100)
     return {"workers": [clean_mongo_doc(w) for w in workers], "hotels": [clean_mongo_doc(h) for h in hotels]}
 
 @api_router.get("/admin/support/threads")
@@ -395,20 +397,35 @@ async def admin_threads(current_user: dict = Depends(require_admin)):
     threads = await db.support_threads.find({}).to_list(100)
     return [clean_mongo_doc(t) for t in threads]
 
-# Others (Mock)
-@api_router.get("/admin/users")
-async def admin_users(current_user: dict = Depends(require_admin)):
-    users = await db.users.find({}, {"_id":0, "password_hash":0}).to_list(100)
-    return [clean_mongo_doc(u) for u in users]
+# Mock/Missing Routes for 404
+@api_router.get("/admin/audit")
+async def admin_audit(): return []
+@api_router.get("/admin/disputes")
+async def admin_disputes(current_user: dict = Depends(require_admin)):
+    disputes = await db.disputes.find({}).to_list(100)
+    return [clean_mongo_doc(d) for d in disputes]
 
+@api_router.post("/admin/disputes")
+async def create_dispute(payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    payload["id"] = str(uuid.uuid4())
+    payload["created_at"] = DateUtils.to_iso(DateUtils.now())
+    await db.disputes.insert_one(payload)
+    return payload
+@api_router.get("/admin/notifications")
+async def admin_notifications(): return []
 @api_router.get("/admin/reviews")
 async def admin_reviews(): return []
 @api_router.get("/admin/settings")
-async def admin_settings(): return {"maintenance": False}
-@api_router.get("/admin/audit")
-async def admin_audit(): return []
-@api_router.get("/admin/notifications")
-async def admin_notifications(): return []
+async def admin_settings():
+    settings = await db.settings.find_one({"type": "general"})
+    if not settings:
+        return {"maintenance": False, "registration_enabled": True}
+    return clean_mongo_doc(settings)
+
+@api_router.put("/admin/settings")
+async def update_admin_settings(payload: Dict[Any, Any], current_user: dict = Depends(require_admin)):
+    await db.settings.update_one({"type": "general"}, {"$set": payload}, upsert=True)
+    return {"status": "success"}
 @api_router.get("/admin/revenue")
 async def admin_revenue(): return {"total": 0}
 
