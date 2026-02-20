@@ -181,6 +181,10 @@ export default function VerificationCard({ user, type, onApprove, onReject, onRe
                 )}
 
                 <div className="p-4 border-t border-border">
+                    <button
+                        onClick={() => setExpanded(!expanded)}
+                        className="text-sm text-brand hover:underline font-medium"
+                    >
                         {expanded ? "Voir moins" : "Voir details"}
                     </button>
                     {expanded && (
@@ -212,7 +216,7 @@ export default function VerificationCard({ user, type, onApprove, onReject, onRe
                 </div>
             </div>
 
-            <DocumentViewer document={viewingDoc} isOpen={source /home/ubuntu/.user_env && cd . && sed -n '125,175p' /home/ubuntu/myshifters/frontend/src/pages/admin/verifications/components/VerificationCard.jsxviewingDoc} onClose={() => setViewingDoc(null)} />
+            <DocumentViewer document={viewingDoc} isOpen={!!viewingDoc} onClose={() => setViewingDoc(null)} />
         </>
     );
 }
