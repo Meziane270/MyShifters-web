@@ -958,7 +958,41 @@ export default function WorkerRegistration({
 
                 {/* ========== BOUTONS DE NAVIGATION ========== */}
                 <div className="flex flex-col gap-3 pt-2 sm:flex-row">
-                    {workerStep === 1 ? (
+                                    {/* Compétences (Skills) - Ajouté pour corriger la visibilité des missions */}
+                                    <div className="space-y-3 pt-4 border-t">
+                                        <Label className="text-base font-bold">
+                                            {lang === "en" ? "My Skills / Roles" : "Mes Métiers / Compétences"}
+                                        </Label>
+                                        <p className="text-xs text-foreground/60 mb-4">
+                                            {lang === "en" 
+                                                ? "Select at least one role to see available missions." 
+                                                : "Sélectionnez au moins un métier pour voir les missions disponibles."}
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            {(SERVICE_TYPES || [
+                                                { id: 'reception', label: 'Réception', icon: '🛎️' },
+                                                { id: 'housekeeping', label: 'Housekeeping', icon: '🧹' },
+                                                { id: 'maintenance', label: 'Maintenance', icon: '🛠️' },
+                                                { id: 'restaurant', label: 'Restauration', icon: '🍽️' }
+                                            ]).map((s) => (
+                                                <button
+                                                    key={s.id}
+                                                    type="button"
+                                                    onClick={() => handleSkillToggle(s.id)}
+                                                    className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border transition-all ${
+                                                        (formData.skills || []).includes(s.id)
+                                                            ? "bg-brand/10 border-brand text-brand shadow-sm"
+                                                            : "bg-background border-border text-muted-foreground hover:border-brand/30"
+                                                    }`}
+                                                >
+                                                    <span className="text-2xl">{s.icon}</span>
+                                                    <span className="text-xs font-bold text-center">{s.label}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {workerStep === 1 ? (
                         <Button type="button" variant="outline" onClick={onBack} className="sm:flex-1">
                             {copy.back}
                         </Button>

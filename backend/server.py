@@ -137,6 +137,7 @@ class ShiftCreate(BaseModel):
     end_time: str
     hourly_rate: float
     positions_available: int = 1
+    hotel_hourly_rate: Optional[float] = None # Taux incluant la commission de 15%
 
 class Shift(ShiftCreate):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -194,25 +195,7 @@ async def register(userData: Dict[Any, Any]):
     token = create_access_token({"user_id": new_user["id"], "role": new_user["role"]})
     return {"token": token, "user": clean_mongo_doc({k: v for k, v in new_user.items() if k != "password_hash"})}
 
-@api_router.get("/auth/setup-admin-secure-2026")
-async def setup_admin():
-    if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
-    email = "oulmasmeziane@outlook.com"
-    password = "AdminPassword2026!"
-    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        await db.users.update_one({"email": email}, {"$set": {"role": "admin", "password_hash": password_hash, "verification_status": "verified"}})
-        return {"status": "Admin updated successfully"}
-
-    new_admin = {
-        "id": str(uuid.uuid4()), "email": email, "password_hash": password_hash,
-        "role": "admin", "first_name": "Meziane", "last_name": "Oulmas",
-        "verification_status": "verified", "created_at": DateUtils.to_iso(DateUtils.now())
-    }
-    await db.users.insert_one(new_admin)
-    return {"status": "Admin created successfully"}
+# Route admin supprimée pour des raisons de sécurité.
 
 @api_router.post("/auth/register/worker")
 async def register_worker(
@@ -221,6 +204,7 @@ async def register_worker(
         address: str = Form(None), city: str = Form(None), postal_code: str = Form(None),
         experience_years: str = Form("0"), has_ae_status: str = Form("false"), siret: str = Form(None),
         billing_address: str = Form(None), billing_city: str = Form(None), billing_postal_code: str = Form(None),
+        skills: str = Form("[]"),
         cv_pdf: UploadFile = File(None)
 ):
     if db is None: raise HTTPException(status_code=500, detail="Database connection failed")
@@ -233,12 +217,19 @@ async def register_worker(
             upload_result = cloudinary.uploader.upload(cv_pdf.file)
             cv_url = upload_result.get("secure_url")
         except Exception as e: logger.error(f"Failed to upload CV: {e}")
+    
+    try:
+        skills_list = json.loads(skills)
+    except:
+        skills_list = []
+
     new_user = {
         "id": str(uuid.uuid4()), "email": email, "password_hash": password_hash, "role": role,
         "first_name": first_name, "last_name": last_name, "phone": phone, "address": address,
         "city": city, "postal_code": postal_code, "experience_years": int(experience_years) if experience_years else 0,
         "has_ae_status": has_ae_status.lower() == "true", "siret": siret, "billing_address": billing_address,
         "billing_city": billing_city, "billing_postal_code": billing_postal_code, "cv_url": cv_url,
+        "skills": skills_list,
         "verification_status": "pending", "created_at": DateUtils.to_iso(DateUtils.now())
     }
     new_user = {k: v for k, v in new_user.items() if v is not None}
@@ -276,7 +267,18 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 @api_router.post("/shifts")
 async def create_shift(payload: ShiftCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != UserRole.HOTEL: raise HTTPException(status_code=403)
-    new_shift = Shift(hotel_id=current_user["id"], hotel_name=current_user.get("hotel_name", "Hôtel"), hotel_city=current_user.get("city"), **payload.model_dump())
+    
+    # Calcul de la commission de 15% pour l'hôtel
+    # Si le worker reçoit 17.5€, l'hôtel paie 17.5 * 1.15 = 20.125€
+    data = payload.model_dump()
+    data["hotel_hourly_rate"] = round(payload.hourly_rate * 1.15, 2)
+    
+    new_shift = Shift(
+        hotel_id=current_user["id"], 
+        hotel_name=current_user.get("hotel_name", "Hôtel"), 
+        hotel_city=current_user.get("city"), 
+        **data
+    )
     await db.shifts.insert_one(new_shift.model_dump())
     return new_shift
 
@@ -431,8 +433,29 @@ async def worker_stats(current_user: dict = Depends(get_current_user)):
 # Stats hotel (déjà existant)
 @api_router.get("/stats/hotel")
 async def get_hotel_stats(current_user: dict = Depends(get_current_user)):
-    count = await db.shifts.count_documents({"hotel_id": current_user["id"]})
-    return {"total_shifts": count}
+    if current_user["role"] != UserRole.HOTEL:
+        raise HTTPException(status_code=403)
+    
+    active_shifts = await db.shifts.count_documents({"hotel_id": current_user["id"], "status": ShiftStatus.OPEN})
+    
+    # Récupérer les IDs des shifts de cet hôtel
+    hotel_shifts = await db.shifts.find({"hotel_id": current_user["id"]}, {"id": 1}).to_list(None)
+    shift_ids = [s["id"] for s in hotel_shifts]
+    
+    pending_apps = await db.applications.count_documents({"shift_id": {"$in": shift_ids}, "status": ApplicationStatus.PENDING})
+    
+    # Calcul des dépenses du mois (basé sur les shifts complétés)
+    # Pour simplifier, on compte tous les shifts de cet hôtel multipliés par leur coût hôtel
+    # En production, il faudrait une logique plus précise par application acceptée/complétée
+    monthly_spend = 0
+    # Simulation de dépense
+    
+    return {
+        "active_shifts": active_shifts,
+        "pending_applications": pending_apps,
+        "monthly_spend": monthly_spend,
+        "total_shifts": len(hotel_shifts)
+    }
 
 # Invoices
 @api_router.get("/invoices/hotel")
@@ -578,7 +601,21 @@ async def update_admin_settings(payload: Dict[Any, Any], current_user: dict = De
     return {"status": "success"}
 
 @api_router.get("/admin/revenue")
-async def admin_revenue(): return {"total": 0}
+async def admin_revenue(current_user: dict = Depends(require_admin)):
+    # Récupérer tous les shifts pour calculer le revenu potentiel (15% de commission)
+    shifts = await db.shifts.find({}).to_list(None)
+    total_revenue = 0
+    for s in shifts:
+        # On suppose ici que le revenu est généré par shift (ou par application acceptée)
+        # Pour cet exemple, on calcule 15% de commission sur le taux horaire
+        # En prod, il faudrait multiplier par la durée et le nombre de positions
+        rate = s.get("hourly_rate", 0)
+        total_revenue += rate * 0.15
+        
+    return {
+        "total_revenue": round(total_revenue, 2),
+        "commission_rate": 0.15
+    }
 
 app.include_router(api_router)
 

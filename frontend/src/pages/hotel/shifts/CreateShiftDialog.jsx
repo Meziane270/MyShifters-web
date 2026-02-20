@@ -299,15 +299,21 @@ export default function CreateShiftDialog({ isOpen, onClose, onSuccess, canAct, 
 
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
-                            <Label className="text-foreground">Taux horaire (€)</Label>
+                            <Label className="text-foreground">Taux horaire Worker (€)</Label>
                             <Input
                                 type="number"
-                                placeholder="Ex: 15"
+                                step="0.01"
+                                placeholder="Ex: 17.5"
                                 value={formData.hourly_rate}
                                 onChange={(e) => setFormData((prev) => ({ ...prev, hourly_rate: e.target.value }))}
                                 required
                                 className="bg-background border-border text-foreground"
                             />
+                            {formData.hourly_rate && (
+                                <p className="text-[10px] text-brand font-bold uppercase tracking-tight">
+                                    Coût Hôtel : {(parseFloat(formData.hourly_rate) * 1.15).toFixed(2)}€/h (+15%)
+                                </p>
+                            )}
                         </div>
                         <div className="space-y-2">
                             <Label className="text-foreground">Postes disponibles</Label>
